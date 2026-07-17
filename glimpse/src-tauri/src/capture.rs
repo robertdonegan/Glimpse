@@ -321,11 +321,29 @@ fn spawn_poller(
 struct ActiveCapture {
     child: Child,
     start: Instant,
+    /// Wall-clock ms when telemetry began — compared against the sidecar's
+    /// FIRST_FRAME_MS to align cursor data with the video.
+    start_unix_ms: u64,
+    first_frame_ms: Arc<Mutex<Option<u64>>>,
     path: String,
     has_audio: bool,
     stop_flag: Arc<AtomicBool>,
     log: Arc<Mutex<TelemetryLog>>,
     poller: JoinHandle<()>,
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The ScreenCaptureKit sidecar next to our executable, if it was built.
+fn sidecar_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let p = exe.parent()?.join("glimpse-capture");
+    p.exists().then_some(p)
 }
 
 pub struct CaptureState(Mutex<Option<ActiveCapture>>);
@@ -357,20 +375,53 @@ pub fn start_native_capture(
         .to_string_lossy()
         .into_owned();
 
-    // -v video, -x no UI sounds, -g include default audio input.
-    // Video mode omits the cursor unless -C is passed — exactly what we want.
-    let mut cmd = Command::new("screencapture");
-    cmd.arg("-v").arg("-x");
-    if audio {
-        cmd.arg("-g");
-    }
-    cmd.arg(&path);
-
-    let child = cmd.spawn().map_err(|e| {
-        format!("Could not start screencapture: {e}. Grant Screen Recording permission and retry.")
-    })?;
-
     let start = Instant::now();
+    let start_unix_ms = unix_ms();
+    let first_frame_ms: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+
+    // Preferred: our ScreenCaptureKit sidecar — records with showsCursor=false
+    // (truly cursor-free pixels) and reports its first-frame wall clock so
+    // telemetry aligns with the video. Fallback: `screencapture` (bakes the
+    // cursor, no sync marker).
+    let child = if let Some(sidecar) = sidecar_path() {
+        let mut cmd = Command::new(sidecar);
+        cmd.arg(&path)
+            .arg(if audio { "1" } else { "0" })
+            .stdout(std::process::Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| {
+            format!("Could not start capture sidecar: {e}. Grant Screen Recording permission and retry.")
+        })?;
+        if let Some(stdout) = child.stdout.take() {
+            let ff = first_frame_ms.clone();
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if let Some(v) = line.strip_prefix("FIRST_FRAME_MS ") {
+                        if let Ok(ms) = v.trim().parse::<u64>() {
+                            if let Ok(mut g) = ff.lock() {
+                                *g = Some(ms);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        child
+    } else {
+        // -v video, -x no UI sounds, -g include default audio input.
+        let mut cmd = Command::new("screencapture");
+        cmd.arg("-v").arg("-x");
+        if audio {
+            cmd.arg("-g");
+        }
+        cmd.arg(&path);
+        cmd.spawn().map_err(|e| {
+            format!(
+                "Could not start screencapture: {e}. Grant Screen Recording permission and retry."
+            )
+        })?
+    };
+
     let stop_flag = Arc::new(AtomicBool::new(false));
     let log = Arc::new(Mutex::new(TelemetryLog::default()));
     // Prompts for Accessibility on first use; hand detection degrades
@@ -381,6 +432,8 @@ pub fn start_native_capture(
     *slot = Some(ActiveCapture {
         child,
         start,
+        start_unix_ms,
+        first_frame_ms,
         path,
         has_audio: audio,
         stop_flag,
@@ -412,7 +465,33 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
     }
     let _ = active.child.wait();
 
-    let duration_ms = active.start.elapsed().as_secs_f64() * 1000.0;
+    // Align telemetry to the video: the sidecar reports when its first frame
+    // actually landed; everything before that instant is pre-roll.
+    let shift_ms = active
+        .first_frame_ms
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map(|ff| ff.saturating_sub(active.start_unix_ms) as f64)
+        .unwrap_or(0.0);
+    let cursor: Vec<Sample> = telemetry
+        .cursor
+        .into_iter()
+        .map(|mut s| {
+            s.t = (s.t - shift_ms).max(0.0);
+            s
+        })
+        .collect();
+    let clicks: Vec<Click> = telemetry
+        .clicks
+        .into_iter()
+        .map(|mut c| {
+            c.t = (c.t - shift_ms).max(0.0);
+            c
+        })
+        .collect();
+
+    let duration_ms = (active.start.elapsed().as_secs_f64() * 1000.0 - shift_ms).max(1.0);
     let (screen_w, screen_h) = main_display_size();
 
     if !std::path::Path::new(&active.path).exists() {
@@ -426,8 +505,8 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
     Ok(CaptureResult {
         path: active.path,
         duration_ms,
-        cursor: telemetry.cursor,
-        clicks: telemetry.clicks,
+        cursor,
+        clicks,
         screen_w,
         screen_h,
         has_audio: active.has_audio,
