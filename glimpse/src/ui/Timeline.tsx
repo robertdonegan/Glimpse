@@ -1,6 +1,62 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useGlimpse } from '../state/store';
 import { outputDuration } from '../timeline/sampler';
+
+/** Peak data per blob, computed once. */
+const peaksCache = new WeakMap<Blob, Float32Array>();
+
+async function computePeaks(blob: Blob, buckets = 600): Promise<Float32Array> {
+  const cached = peaksCache.get(blob);
+  if (cached) return cached;
+  const ctx = new AudioContext();
+  try {
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const ch = audio.getChannelData(0);
+    const peaks = new Float32Array(buckets);
+    const step = Math.max(1, Math.floor(ch.length / buckets));
+    for (let i = 0; i < buckets; i++) {
+      let max = 0;
+      const start = i * step;
+      const end = Math.min(ch.length, start + step);
+      for (let j = start; j < end; j += 16) {
+        const v = Math.abs(ch[j]);
+        if (v > max) max = v;
+      }
+      peaks[i] = max;
+    }
+    peaksCache.set(blob, peaks);
+    return peaks;
+  } finally {
+    void ctx.close();
+  }
+}
+
+/** Mirror-image waveform strip for an audio blob. */
+function Waveform({ blob, color }: { blob: Blob; color: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let dead = false;
+    void computePeaks(blob)
+      .then((peaks) => {
+        if (dead || !canvasRef.current) return;
+        const cv = canvasRef.current;
+        const ctx = cv.getContext('2d')!;
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.fillStyle = color;
+        const mid = cv.height / 2;
+        const w = cv.width / peaks.length;
+        for (let i = 0; i < peaks.length; i++) {
+          const h = Math.max(1, peaks[i] * mid);
+          ctx.fillRect(i * w, mid - h, Math.max(1, w - 0.5), h * 2);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      dead = true;
+    };
+  }, [blob, color]);
+  return <canvas ref={canvasRef} className="waveform" width={600} height={30} />;
+}
 
 function tc(ms: number): string {
   const s = ms / 1000;
@@ -29,8 +85,14 @@ export function Timeline({
   const addZoomAt = useGlimpse((s) => s.addZoomAt);
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const applyAutoZoom = useGlimpse((s) => s.applyAutoZoom);
+  const addMusic = useGlimpse((s) => s.addMusic);
+  const updateMusic = useGlimpse((s) => s.updateMusic);
+  const removeMusic = useGlimpse((s) => s.removeMusic);
+  const previewRate = useGlimpse((s) => s.previewRate);
+  const setPreviewRate = useGlimpse((s) => s.setPreviewRate);
 
   const trackRef = useRef<HTMLDivElement>(null);
+  const musicInput = useRef<HTMLInputElement>(null);
 
   if (!project) return null;
   const duration = project.recording.duration;
@@ -117,6 +179,29 @@ export function Timeline({
     setPlayhead(t);
   };
 
+  /** Drag the music clip along the timeline to re-time it. */
+  const onMusicPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    const music = project.music;
+    if (!music) return;
+    const grabOffset = timeAt(e.clientX) - music.offset;
+    const move = (ev: PointerEvent) => {
+      const m = useGlimpse.getState().project?.music;
+      if (!m) return;
+      const offset = Math.max(
+        -m.duration + 200,
+        Math.min(timeAt(ev.clientX) - grabOffset, duration - 200),
+      );
+      updateMusic({ offset });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   return (
     <div className="timeline">
       <div className="timeline-head">
@@ -198,6 +283,35 @@ export function Timeline({
           >
             Auto-zoom
           </button>
+          <button
+            className="btn"
+            onClick={() => musicInput.current?.click()}
+            title="Import a music or voice-over file onto the audio track"
+          >
+            {project.music ? 'Replace audio' : 'Add audio'}
+          </button>
+          <input
+            ref={musicInput}
+            type="file"
+            accept="audio/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void addMusic(f);
+              e.target.value = '';
+            }}
+          />
+          <select
+            className="rate-select"
+            value={previewRate}
+            onChange={(e) => setPreviewRate(Number(e.target.value))}
+            title="Preview playback speed (slow viewing only — export is unaffected)"
+            aria-label="Preview playback speed"
+          >
+            <option value={1}>1×</option>
+            <option value={0.5}>0.5×</option>
+            <option value={0.25}>0.25×</option>
+          </select>
         </div>
       </div>
 
@@ -271,6 +385,39 @@ export function Timeline({
           title="Drag to scrub"
         />
       </div>
+
+      {(project.recording.audioBlob || project.music) && (
+        <div className="audio-lane">
+          {project.recording.audioBlob && (
+            <div className="audio-rec" title="Recorded audio (locked to the video)">
+              <Waveform blob={project.recording.audioBlob} color="rgba(45, 212, 191, 0.6)" />
+            </div>
+          )}
+          {project.music && (
+            <div
+              className="music-clip"
+              style={{
+                left: `${(project.music.offset / duration) * 100}%`,
+                width: `${(project.music.duration / duration) * 100}%`,
+              }}
+              onPointerDown={onMusicPointerDown}
+              title={`${project.music.name} — drag to re-time`}
+            >
+              <Waveform blob={project.music.blob} color="rgba(147, 197, 253, 0.95)" />
+              <button
+                className="music-remove"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={removeMusic}
+                title="Remove audio track"
+                aria-label="Remove audio track"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <div className="playhead" style={{ left: `${(playhead / duration) * 100}%` }} />
+        </div>
+      )}
     </div>
   );
 }

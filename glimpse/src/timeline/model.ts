@@ -138,11 +138,25 @@ export interface Overlay {
   opacity: number;
 }
 
+/** An imported audio track (music / voice-over) mixed under the recording. */
+export interface MusicTrack {
+  name: string;
+  /** Start position on the timeline, source ms. May sit before 0. */
+  offset: Ms;
+  /** Track length, ms (decoded once on import). */
+  duration: Ms;
+  /** 0..1 mix gain. */
+  gain: number;
+  /** The audio file itself — serialized as a segment of the project file. */
+  blob: Blob;
+}
+
 export interface Project {
   name: string;
   recording: Recording;
   zooms: ZoomSegment[];
   overlays: Overlay[];
+  music?: MusicTrack;
   style: StyleSettings;
   /** Output frame size. */
   output: { width: number; height: number; fps: number };

@@ -530,6 +530,25 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         </div>
       )}
 
+      {project.music && (
+        <div className="section">
+          <h3>Audio track</h3>
+          <p className="hint" style={{ margin: '0 0 8px' }}>
+            {project.music.name}
+          </p>
+          <SliderRow
+            label="Volume"
+            value={project.music.gain}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => useGlimpse.getState().updateMusic({ gain: v })}
+          />
+          <p className="hint">Drag the blue clip on the timeline to re-time it.</p>
+        </div>
+      )}
+
       <div className="section">
         <h3>Overlays</h3>
         <button className="chip" onClick={() => overlayInput.current?.click()}>

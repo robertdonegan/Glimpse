@@ -18,10 +18,29 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<GlimpseRenderer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const musicRef = useRef<HTMLAudioElement | null>(null);
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
   const playhead = useGlimpse((s) => s.playhead);
+
+  // Imported music plays through its own element, synced in the render loop.
+  useEffect(() => {
+    const blob = project?.music?.blob;
+    if (!blob) {
+      musicRef.current?.pause();
+      musicRef.current = null;
+      return;
+    }
+    const el = new Audio(URL.createObjectURL(blob));
+    el.preload = 'auto';
+    musicRef.current = el;
+    return () => {
+      el.pause();
+      URL.revokeObjectURL(el.src);
+      if (musicRef.current === el) musicRef.current = null;
+    };
+  }, [project?.music?.blob]);
 
   // Mount renderer + recording video once per project.
   useEffect(() => {
@@ -56,9 +75,11 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         const tMs = st.playing ? video.currentTime * 1000 : st.playhead;
         if (st.playing) {
           st.setPlayhead(tMs);
-          // Clip speeds drive the preview's playback rate live, so a 0.5×
-          // slow pass previews exactly as it exports.
-          video.playbackRate = speedAt(current.zooms, tMs);
+          // Clip speeds drive the preview's playback rate live (so a 0.5×
+          // slow pass previews exactly as it exports), scaled by the
+          // preview-only slow-viewing rate.
+          const rate = speedAt(current.zooms, tMs) * st.previewRate;
+          video.playbackRate = rate;
           const trimEnd = current.trim?.end ?? current.recording.duration;
           if (video.ended || tMs >= trimEnd) {
             if (st.loop) {
@@ -68,6 +89,28 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
               st.setPlaying(false);
             }
           }
+
+          // Keep the music track in lockstep with the timeline.
+          const music = current.music;
+          const el = musicRef.current;
+          if (music && el) {
+            const rel = (tMs - music.offset) / 1000;
+            const active = rel >= 0 && rel < music.duration / 1000;
+            el.volume = music.gain;
+            el.playbackRate = Math.max(0.0625, rate);
+            if (active) {
+              if (el.paused) {
+                el.currentTime = rel;
+                void el.play();
+              } else if (Math.abs(el.currentTime - rel) > 0.25) {
+                el.currentTime = rel; // drift correction
+              }
+            } else if (!el.paused) {
+              el.pause();
+            }
+          }
+        } else if (musicRef.current && !musicRef.current.paused) {
+          musicRef.current.pause();
         }
         renderer.render(sampleFrame(current, tMs));
         raf = requestAnimationFrame(loop);

@@ -561,6 +561,64 @@ button {
   border-color: var(--line);
 }
 
+/* ---------- Audio lane ---------- */
+
+.audio-lane {
+  position: relative;
+  height: 34px;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.audio-rec {
+  position: absolute;
+  inset: 0;
+}
+
+.waveform {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.music-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.7);
+  border-radius: 6px;
+  cursor: grab;
+  overflow: hidden;
+}
+
+.music-clip:active {
+  cursor: grabbing;
+}
+
+.music-remove {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 5px;
+  color: rgba(147, 197, 253, 0.95);
+}
+
+.rate-select {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+
 /* ---------- Inspector ---------- */
 
 .inspector {

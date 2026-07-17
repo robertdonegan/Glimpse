@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import type { Overlay, Project, Recording, StyleSettings, ZoomSegment } from '../timeline/model';
+import type {
+  MusicTrack,
+  Overlay,
+  Project,
+  Recording,
+  StyleSettings,
+  ZoomSegment,
+} from '../timeline/model';
 import { createProject, makeId } from '../timeline/model';
 import { generateAutoZooms } from '../timeline/autoZoom';
 import { beginRecording, type ActiveRecording } from '../capture/recorder';
@@ -25,6 +32,8 @@ interface GlimpseState {
   playhead: number; // ms
   playing: boolean;
   loop: boolean;
+  /** Preview-only playback rate (slow viewing). Export is unaffected. */
+  previewRate: number;
 
   // Export
   exporting: boolean;
@@ -58,6 +67,11 @@ interface GlimpseState {
   addOverlay: (file: File) => void;
   updateOverlay: (id: string, patch: Partial<Overlay>) => void;
   removeOverlay: (id: string) => void;
+
+  addMusic: (file: File) => Promise<void>;
+  updateMusic: (patch: Partial<Omit<MusicTrack, 'blob'>>) => void;
+  removeMusic: () => void;
+  setPreviewRate: (rate: number) => void;
 
   runExport: () => Promise<void>;
   exportPng: (scale?: number) => Promise<void>;
@@ -97,6 +111,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
   playhead: 0,
   playing: false,
   loop: false,
+  previewRate: 1,
   exporting: false,
   exportProgress: null,
 
@@ -307,6 +322,44 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
     if (!p) return;
     set({ project: { ...p, overlays: p.overlays.filter((o) => o.id !== id) } });
   },
+
+  addMusic: async (file) => {
+    const p = get().project;
+    if (!p) return;
+    // Decode once for the real duration; the blob itself is kept verbatim.
+    let duration = 0;
+    try {
+      const ctx = new AudioContext();
+      const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+      duration = decoded.duration * 1000;
+      void ctx.close();
+    } catch {
+      window.alert('Could not decode that audio file.');
+      return;
+    }
+    const music: MusicTrack = {
+      name: file.name,
+      offset: 0,
+      duration,
+      gain: 0.8,
+      blob: file,
+    };
+    set({ project: { ...get().project!, music } });
+  },
+
+  updateMusic: (patch) => {
+    const p = get().project;
+    if (!p?.music) return;
+    set({ project: { ...p, music: { ...p.music, ...patch } } });
+  },
+
+  removeMusic: () => {
+    const p = get().project;
+    if (!p) return;
+    set({ project: { ...p, music: undefined } });
+  },
+
+  setPreviewRate: (previewRate) => set({ previewRate }),
 
   runExport: async () => {
     const p = get().project;

@@ -34,7 +34,7 @@ export function webCodecsSupported(): boolean {
 /** Audio survives export only at uniform 1× speed (no resampling pipeline). */
 export function audioExportable(project: Project): boolean {
   return (
-    project.recording.hasAudio &&
+    (project.recording.hasAudio || !!project.music) &&
     typeof AudioEncoder !== 'undefined' &&
     project.zooms.every((z) => (z.speed || 1) === 1)
   );
@@ -92,6 +92,46 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Mix recorded audio and imported music into one 48 kHz stereo buffer
+ * covering the trimmed span. OfflineAudioContext handles resampling, offsets
+ * and gain in one deterministic pass.
+ */
+async function renderMixedAudio(
+  project: Project,
+  startSec: number,
+  durSec: number,
+): Promise<AudioBuffer | null> {
+  const parts: { buffer: AudioBuffer; when: number; gain: number }[] = [];
+  if (project.recording.hasAudio) {
+    const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
+    if (b) parts.push({ buffer: b, when: -startSec, gain: 1 });
+  }
+  if (project.music) {
+    const b = await decodeAudio(project.music.blob);
+    if (b) {
+      parts.push({
+        buffer: b,
+        when: project.music.offset / 1000 - startSec,
+        gain: project.music.gain,
+      });
+    }
+  }
+  if (parts.length === 0) return null;
+
+  const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
+  for (const p of parts) {
+    const src = ctx.createBufferSource();
+    src.buffer = p.buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = p.gain;
+    src.connect(gain).connect(ctx.destination);
+    if (p.when >= 0) src.start(p.when);
+    else src.start(0, -p.when); // clip the part that sits before the in-point
+  }
+  return ctx.startRendering();
 }
 
 /** Encode a slice of an AudioBuffer as AAC chunks into the muxer. */
@@ -168,10 +208,8 @@ export async function exportProject(
   renderer.attachVideo(video);
 
   const withAudio = audioExportable(project);
-  // Prefer the dedicated audio-only blob — decodeAudioData is unreliable on
-  // video containers.
   const audio = withAudio
-    ? await decodeAudio(project.recording.audioBlob ?? project.recording.blob)
+    ? await renderMixedAudio(project, trim.start / 1000, outDurationSec)
     : null;
 
   const muxer = new Muxer({
@@ -236,7 +274,7 @@ export async function exportProject(
       onProgress({ frame: i + 1, totalFrames });
     }
     await encoder.flush();
-    if (audio) await encodeAudioTrack(muxer, audio, trim.start / 1000, outDurationSec);
+    if (audio) await encodeAudioTrack(muxer, audio, 0, outDurationSec);
     muxer.finalize();
     const { buffer } = muxer.target as ArrayBufferTarget;
     return { blob: new Blob([buffer], { type: 'video/mp4' }), extension: 'mp4' };
