@@ -29,6 +29,10 @@ export interface CursorState {
 export interface FrameState {
   camera: CameraState;
   cursor: CursorState;
+  /** 3D pose for this frame, degrees — base style blended with zoom tilt. */
+  pose: { rotX: number; rotY: number; rotZ: number };
+  /** Source time of this frame (drives time-windowed overlays). */
+  t: number;
 }
 
 const IDLE_CAMERA: CameraState = { scale: 1, focusX: 0.5, focusY: 0.5 };
@@ -121,9 +125,21 @@ export function sampleFrame(project: Project, t: number): FrameState {
   const { recording, style, zooms } = project;
   const camera = sampleCamera(zooms, t);
 
+  // Per-zoom 3D tilt: ease from the base pose into the segment's pose on the
+  // same ramp as the zoom, and back out on the outro.
+  const seg = segmentAt(zooms, t);
+  let pose = { ...style.pose };
+  if (seg?.pose) {
+    const k = rampK(seg, t);
+    pose = {
+      rotX: lerp(style.pose.rotX, seg.pose.rotX, k),
+      rotY: lerp(style.pose.rotY, seg.pose.rotY, k),
+      rotZ: lerp(style.pose.rotZ, seg.pose.rotZ, k),
+    };
+  }
+
   // Follow-cam: the zoom tracks a trailing average of the cursor path — calm,
   // deterministic (same t always gives the same shot), export-safe.
-  const seg = segmentAt(zooms, t);
   if (seg?.follow && recording.cursor.length > 0) {
     const k = rampK(seg, t);
     let ax = 0;
@@ -169,7 +185,7 @@ export function sampleFrame(project: Project, t: number): FrameState {
     }
   }
 
-  return { camera, cursor };
+  return { camera, cursor, pose, t };
 }
 
 /* ---------- Clip speed: source-time ↔ output-time mapping ----------

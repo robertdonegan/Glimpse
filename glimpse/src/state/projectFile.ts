@@ -19,6 +19,7 @@ interface ProjectMeta {
   version: number;
   name: string;
   zooms: Project['zooms'];
+  overlays?: Project['overlays'];
   style: Project['style'];
   output: Project['output'];
   trim?: Project['trim'];
@@ -31,6 +32,7 @@ export function serializeProject(p: Project): Blob {
     version: VERSION,
     name: p.name,
     zooms: p.zooms,
+    overlays: p.overlays,
     style: p.style,
     output: p.output,
     trim: p.trim,
@@ -55,6 +57,7 @@ export async function deserializeProject(file: Blob): Promise<Project> {
   return normalizeProject({
     name: meta.name,
     zooms: meta.zooms,
+    overlays: meta.overlays,
     style: meta.style,
     output: meta.output,
     trim: meta.trim,

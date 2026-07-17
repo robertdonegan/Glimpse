@@ -67,6 +67,11 @@ export interface ZoomSegment {
   speed: number;
   /** Camera tracks the recorded cursor instead of the static focus point. */
   follow?: boolean;
+  /**
+   * Optional 3D pose override while this zoom is active — the frame eases
+   * from the base pose into this tilt and back out on the segment's ramp.
+   */
+  pose?: { rotX: number; rotY: number; rotZ: number };
 }
 
 export type CursorStyle = 'default' | 'circle' | 'none';
@@ -97,19 +102,41 @@ export interface StyleSettings {
 }
 
 export interface BackgroundSettings {
-  kind: 'gradient' | 'solid' | 'image';
+  kind: 'gradient' | 'corners' | 'solid' | 'image';
+  /** Linear: start/end. Corners: A=top-left, B=top-right. */
   colorA: string;
   colorB: string;
-  /** Gradient angle in degrees. */
+  /** Corners only: C=bottom-left, D=bottom-right. */
+  colorC?: string;
+  colorD?: string;
+  /** Gradient angle in degrees (linear mode). */
   angle: number;
   /** Data-URL of an uploaded backdrop image (kind === 'image'). */
   imageData?: string;
+}
+
+/** An imported graphic (SVG/PNG/…) composited over the recording. */
+export interface Overlay {
+  id: string;
+  name: string;
+  /** Data-URL of the source image. */
+  imageData: string;
+  /** Normalised centre position on the recording. */
+  x: number;
+  y: number;
+  /** Width as a fraction of the recording width. */
+  scale: number;
+  /** Visible time window, source ms. */
+  start: Ms;
+  end: Ms;
+  opacity: number;
 }
 
 export interface Project {
   name: string;
   recording: Recording;
   zooms: ZoomSegment[];
+  overlays: Overlay[];
   style: StyleSettings;
   /** Output frame size. */
   output: { width: number; height: number; fps: number };
@@ -140,6 +167,7 @@ export function createProject(recording: Recording): Project {
     name: 'Untitled',
     recording,
     zooms: [],
+    overlays: [],
     style: structuredClone(DEFAULT_STYLE),
     output: landscape
       ? { width: 1920, height: 1080, fps: 60 }
@@ -159,6 +187,7 @@ export function normalizeProject(p: Project): Project {
     name: p.name || 'Untitled',
     style,
     zooms: (p.zooms ?? []).map((z) => ({ ...z, speed: z.speed ?? 1 })),
+    overlays: p.overlays ?? [],
     recording: { ...p.recording, hasAudio: p.recording.hasAudio ?? false },
     trim: p.trim ?? { start: 0, end: p.recording.duration },
   };

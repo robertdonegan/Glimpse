@@ -403,10 +403,11 @@ button {
   );
 }
 
+/* Segments hug the lower half — the scrub grip owns the top edge. */
 .zoom-seg {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 26px;
+  bottom: 6px;
   background: var(--amber-soft);
   border: 1px solid var(--amber);
   border-radius: 6px;
@@ -593,10 +594,46 @@ button {
   flex-shrink: 0;
 }
 
+/* Slim, classy range sliders: hairline trough, small round thumb. */
 .row input[type='range'] {
   flex: 1;
-  accent-color: var(--amber);
   min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+}
+
+.row input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.row input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
+}
+
+.row input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.row input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
 }
 
 .row .value {
@@ -645,6 +682,18 @@ button {
   border-color: var(--amber);
   color: var(--amber);
   background: var(--amber-soft);
+}
+
+.overlay-item {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
+
+.overlay-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .export-progress {

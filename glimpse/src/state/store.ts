@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Project, Recording, StyleSettings, ZoomSegment } from '../timeline/model';
+import type { Overlay, Project, Recording, StyleSettings, ZoomSegment } from '../timeline/model';
 import { createProject, makeId } from '../timeline/model';
 import { generateAutoZooms } from '../timeline/autoZoom';
 import { beginRecording, type ActiveRecording } from '../capture/recorder';
@@ -54,6 +54,10 @@ interface GlimpseState {
   updateZoom: (id: string, patch: Partial<ZoomSegment>) => void;
   removeZoom: (id: string) => void;
   applyAutoZoom: () => void;
+
+  addOverlay: (file: File) => void;
+  updateOverlay: (id: string, patch: Partial<Overlay>) => void;
+  removeOverlay: (id: string) => void;
 
   runExport: () => Promise<void>;
   exportPng: (scale?: number) => Promise<void>;
@@ -264,6 +268,44 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
         zooms: generateAutoZooms(p.recording.clicks, p.recording.duration),
       },
     });
+  },
+
+  addOverlay: (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const p = get().project;
+      if (!p) return;
+      const overlay: Overlay = {
+        id: makeId('ovl'),
+        name: file.name,
+        imageData: reader.result as string,
+        x: 0.5,
+        y: 0.5,
+        scale: 0.25,
+        start: 0,
+        end: p.recording.duration,
+        opacity: 1,
+      };
+      set({ project: { ...p, overlays: [...p.overlays, overlay] } });
+    };
+    reader.readAsDataURL(file);
+  },
+
+  updateOverlay: (id, patch) => {
+    const p = get().project;
+    if (!p) return;
+    set({
+      project: {
+        ...p,
+        overlays: p.overlays.map((o) => (o.id === id ? { ...o, ...patch } : o)),
+      },
+    });
+  },
+
+  removeOverlay: (id) => {
+    const p = get().project;
+    if (!p) return;
+    set({ project: { ...p, overlays: p.overlays.filter((o) => o.id !== id) } });
   },
 
   runExport: async () => {

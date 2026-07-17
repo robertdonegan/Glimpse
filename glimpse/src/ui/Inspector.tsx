@@ -43,7 +43,11 @@ const POSE_PRESETS: Record<string, Pose> = {
   Flat: { rotX: 0, rotY: 0, rotZ: 0 },
   'Hero left': { rotX: 6, rotY: 18, rotZ: -2 },
   'Hero right': { rotX: 6, rotY: -18, rotZ: 2 },
+  'Hero left XL': { rotX: 8, rotY: 32, rotZ: -3 },
+  'Hero right XL': { rotX: 8, rotY: -32, rotZ: 3 },
   Floating: { rotX: 14, rotY: 0, rotZ: 0 },
+  'Float up': { rotX: -12, rotY: 0, rotZ: 0 },
+  Showcase: { rotX: 16, rotY: 26, rotZ: -4 },
 };
 
 const POSE_STORE_KEY = 'glimpse.poseTemplates';
@@ -65,6 +69,9 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const patchStyle = useGlimpse((s) => s.patchStyle);
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const removeZoom = useGlimpse((s) => s.removeZoom);
+  const addOverlay = useGlimpse((s) => s.addOverlay);
+  const updateOverlay = useGlimpse((s) => s.updateOverlay);
+  const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const runExport = useGlimpse((s) => s.runExport);
   const exportPng = useGlimpse((s) => s.exportPng);
   const exporting = useGlimpse((s) => s.exporting);
@@ -72,6 +79,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
 
   const [poseTemplates, setPoseTemplates] = useState<Record<string, Pose>>(loadPoseTemplates);
   const backdropInput = useRef<HTMLInputElement>(null);
+  const overlayInput = useRef<HTMLInputElement>(null);
 
   if (!project) return null;
   const { style, recording } = project;
@@ -223,40 +231,74 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         </div>
         <div className="row">
           <label>Backdrop</label>
+          <select
+            value={style.background.kind === 'image' ? 'gradient' : style.background.kind}
+            onChange={(e) =>
+              patchStyle('background', {
+                ...style.background,
+                kind: e.target.value as 'gradient' | 'corners' | 'solid',
+              })
+            }
+            aria-label="Backdrop type"
+          >
+            <option value="gradient">Linear gradient</option>
+            <option value="corners">4-corner gradient</option>
+            <option value="solid">Solid</option>
+          </select>
+        </div>
+        <div className="row">
+          <label>{style.background.kind === 'corners' ? 'Top' : 'Colours'}</label>
           <input
             type="color"
             value={style.background.colorA}
             onChange={(e) =>
-              patchStyle('background', {
-                ...style.background,
-                kind: style.background.kind === 'image' ? 'gradient' : style.background.kind,
-                colorA: e.target.value,
-              })
+              patchStyle('background', { ...style.background, colorA: e.target.value })
             }
             aria-label="Backdrop colour A"
           />
-          <input
-            type="color"
-            value={style.background.colorB}
-            onChange={(e) =>
-              patchStyle('background', {
-                ...style.background,
-                kind: style.background.kind === 'image' ? 'gradient' : style.background.kind,
-                colorB: e.target.value,
-              })
-            }
-            aria-label="Backdrop colour B"
-          />
+          {style.background.kind !== 'solid' && (
+            <input
+              type="color"
+              value={style.background.colorB}
+              onChange={(e) =>
+                patchStyle('background', { ...style.background, colorB: e.target.value })
+              }
+              aria-label="Backdrop colour B"
+            />
+          )}
         </div>
-        <SliderRow
-          label="Angle"
-          value={style.background.angle}
-          min={0}
-          max={360}
-          step={5}
-          format={(v) => `${v}°`}
-          onChange={(v) => patchStyle('background', { ...style.background, angle: v })}
-        />
+        {style.background.kind === 'corners' && (
+          <div className="row">
+            <label>Bottom</label>
+            <input
+              type="color"
+              value={style.background.colorC ?? style.background.colorB}
+              onChange={(e) =>
+                patchStyle('background', { ...style.background, colorC: e.target.value })
+              }
+              aria-label="Backdrop colour C (bottom-left)"
+            />
+            <input
+              type="color"
+              value={style.background.colorD ?? style.background.colorA}
+              onChange={(e) =>
+                patchStyle('background', { ...style.background, colorD: e.target.value })
+              }
+              aria-label="Backdrop colour D (bottom-right)"
+            />
+          </div>
+        )}
+        {style.background.kind === 'gradient' && (
+          <SliderRow
+            label="Angle"
+            value={style.background.angle}
+            min={0}
+            max={360}
+            step={5}
+            format={(v) => `${v}°`}
+            onChange={(v) => patchStyle('background', { ...style.background, angle: v })}
+          />
+        )}
         <div className="row">
           <label>Image</label>
           <div className="seg-row">
@@ -438,11 +480,139 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             format={(v) => `${v}ms`}
             onChange={(v) => updateZoom(zoom.id, { ramp: v })}
           />
+          <div className="row">
+            <label>Custom tilt</label>
+            <input
+              type="checkbox"
+              checked={!!zoom.pose}
+              onChange={(e) =>
+                updateZoom(zoom.id, {
+                  pose: e.target.checked ? { rotX: 6, rotY: -14, rotZ: 1 } : undefined,
+                })
+              }
+              title="Ease into a different 3D pose while this zoom is active"
+            />
+          </div>
+          {zoom.pose && (
+            <>
+              <SliderRow
+                label="Tilt X"
+                value={zoom.pose.rotX}
+                min={-45}
+                max={45}
+                step={1}
+                format={(v) => `${v}°`}
+                onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotX: v } })}
+              />
+              <SliderRow
+                label="Turn Y"
+                value={zoom.pose.rotY}
+                min={-45}
+                max={45}
+                step={1}
+                format={(v) => `${v}°`}
+                onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotY: v } })}
+              />
+              <SliderRow
+                label="Roll Z"
+                value={zoom.pose.rotZ}
+                min={-20}
+                max={20}
+                step={1}
+                format={(v) => `${v}°`}
+                onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotZ: v } })}
+              />
+            </>
+          )}
           <button className="btn quiet" onClick={() => removeZoom(zoom.id)}>
             Remove zoom
           </button>
         </div>
       )}
+
+      <div className="section">
+        <h3>Overlays</h3>
+        <button className="chip" onClick={() => overlayInput.current?.click()}>
+          Add graphic (SVG, PNG…)
+        </button>
+        <input
+          ref={overlayInput}
+          type="file"
+          accept="image/*,.svg"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) addOverlay(f);
+            e.target.value = '';
+          }}
+        />
+        {project.overlays.map((o) => (
+          <div key={o.id} className="overlay-item">
+            <div className="row" style={{ marginTop: 10 }}>
+              <label className="overlay-name" title={o.name}>
+                {o.name}
+              </label>
+              <button className="chip" onClick={() => removeOverlay(o.id)}>
+                ×
+              </button>
+            </div>
+            <SliderRow
+              label="X"
+              value={o.x}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => updateOverlay(o.id, { x: v })}
+            />
+            <SliderRow
+              label="Y"
+              value={o.y}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => updateOverlay(o.id, { y: v })}
+            />
+            <SliderRow
+              label="Size"
+              value={o.scale}
+              min={0.02}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => updateOverlay(o.id, { scale: v })}
+            />
+            <SliderRow
+              label="Opacity"
+              value={o.opacity}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => updateOverlay(o.id, { opacity: v })}
+            />
+            <SliderRow
+              label="From"
+              value={o.start}
+              min={0}
+              max={recording.duration}
+              step={100}
+              format={(v) => `${(v / 1000).toFixed(1)}s`}
+              onChange={(v) => updateOverlay(o.id, { start: Math.min(v, o.end - 100) })}
+            />
+            <SliderRow
+              label="To"
+              value={o.end}
+              min={0}
+              max={recording.duration}
+              step={100}
+              format={(v) => `${(v / 1000).toFixed(1)}s`}
+              onChange={(v) => updateOverlay(o.id, { end: Math.max(v, o.start + 100) })}
+            />
+          </div>
+        ))}
+      </div>
 
       <div className="section">
         <h3>Export</h3>

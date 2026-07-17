@@ -92,6 +92,11 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     if (project) rendererRef.current?.applyStyle(project.style);
   }, [project?.style]);
 
+  // …and with overlay graphics.
+  useEffect(() => {
+    if (project) rendererRef.current?.applyOverlays(project.overlays);
+  }, [project?.overlays]);
+
   // Play/pause and scrubbing drive the hidden video element.
   useEffect(() => {
     const video = videoRef.current;
