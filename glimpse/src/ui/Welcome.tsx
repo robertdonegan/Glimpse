@@ -14,6 +14,7 @@ function PlayMark() {
 export function Welcome() {
   const startRecording = useGlimpse((s) => s.startRecording);
   const startNativeRecording = useGlimpse((s) => s.startNativeRecording);
+  const enterFrame = useGlimpse((s) => s.enterFrame);
   const openProject = useGlimpse((s) => s.openProject);
   const [error, setError] = useState<string | null>(null);
   const [audio, setAudio] = useState(false);
@@ -67,6 +68,10 @@ export function Welcome() {
             <button className="capture-option" onClick={() => begin(false)}>
               <strong>Other tab / window / screen</strong>
               <span>Pick anything in the share sheet — cursor baked in</span>
+            </button>
+            <button className="capture-option" onClick={enterFrame}>
+              <strong>Frame a URL</strong>
+              <span>Embed a page here and keep cursor magic</span>
             </button>
           </div>
         )}

@@ -19,7 +19,7 @@ import {
 } from '../export/exporter';
 import { saveProjectFile, openProjectFile } from './projectFile';
 
-export type Screen = 'welcome' | 'recording' | 'editor';
+export type Screen = 'welcome' | 'recording' | 'editor' | 'frame';
 
 interface GlimpseState {
   screen: Screen;
@@ -39,10 +39,16 @@ interface GlimpseState {
   exporting: boolean;
   exportProgress: ExportProgress | null;
 
-  startRecording: (preferCurrentTab: boolean, withAudio: boolean) => Promise<void>;
+  startRecording: (
+    preferCurrentTab: boolean,
+    withAudio: boolean,
+    keepScreen?: boolean,
+  ) => Promise<void>;
   /** Desktop app only: cursor-free native screen capture + global telemetry. */
   startNativeRecording: (withAudio: boolean) => Promise<void>;
   stopRecording: () => Promise<void>;
+  enterFrame: () => void;
+  exitFrame: () => void;
   discardProject: () => void;
 
   saveProject: (as?: boolean) => Promise<void>;
@@ -115,10 +121,16 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
   exporting: false,
   exportProgress: null,
 
-  startRecording: async (preferCurrentTab, withAudio) => {
+  startRecording: async (preferCurrentTab, withAudio, keepScreen = false) => {
     const active = await beginRecording({ preferCurrentTab, audio: withAudio });
     active.onEnded(() => void get().stopRecording());
-    set({ active, screen: 'recording' });
+    // Frame mode keeps its own screen mounted — it IS the recorded content.
+    set(keepScreen ? { active } : { active, screen: 'recording' });
+  },
+
+  enterFrame: () => set({ screen: 'frame' }),
+  exitFrame: () => {
+    if (!get().active) set({ screen: 'welcome' });
   },
 
   startNativeRecording: async (withAudio) => {

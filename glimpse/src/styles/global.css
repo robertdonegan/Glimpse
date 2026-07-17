@@ -126,6 +126,7 @@ button {
   display: flex;
   gap: 8px;
   justify-content: center;
+  flex-wrap: wrap;
 }
 
 .capture-option {
@@ -559,6 +560,83 @@ button {
   font-size: 12px;
   line-height: 1;
   border-color: var(--line);
+}
+
+/* ---------- Frame mode ---------- */
+
+.frame-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.frame-url {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.frame-embed {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* Recording: the framed page IS the tab — nothing else visible. */
+.frame-embed.recording {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 5;
+}
+
+.frame-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  max-width: 52ch;
+  margin: 0 auto;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Invisible unless hovered — an escape hatch that stays out of the pixels. */
+.frame-stop {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--record);
+  color: #fff;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 150ms ease;
+  cursor: pointer !important;
+}
+
+.frame-stop:hover {
+  opacity: 1;
 }
 
 /* ---------- Audio lane ---------- */
