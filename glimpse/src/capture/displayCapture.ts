@@ -40,6 +40,15 @@ export async function startDisplayCapture(
 
   const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
   const track = stream.getVideoTracks()[0];
+
+  // Ask again post-hoc — some browsers only honour the cursor hint via
+  // applyConstraints on the live track. Best effort; failures are fine.
+  try {
+    await track.applyConstraints({ cursor: 'never' } as unknown as MediaTrackConstraints);
+  } catch {
+    /* hint unsupported — synthetic cursor will sit above the baked one */
+  }
+
   const settings = track.getSettings();
 
   const surface = (settings as MediaTrackSettings & { displaySurface?: string })

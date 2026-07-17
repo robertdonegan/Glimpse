@@ -2,17 +2,25 @@
  * The Glimpse compositor. One WebGL scene renders both the live preview and
  * every exported frame, driven entirely by FrameState from the sampler:
  *
- *   backdrop (gradient quad)
+ *   backdrop (gradient / solid / uploaded image quad)
  *     └─ poseGroup (3D hero-shot rotation)
  *          └─ zoomGroup (scale + pan from camera state)
  *               ├─ shadow plane
- *               ├─ video plane (rounded-corner shader, video texture)
+ *               ├─ video plane (rounded-corner + depth-of-field shader)
  *               └─ cursor + click-pulse sprites
+ *
+ * Depth of field lives inside the video-plane shader: each fragment knows its
+ * view-space depth, and blur radius grows with distance from the focus plane
+ * (the camera-to-plane distance). Tilt the 3D pose and the receding edge
+ * genuinely defocuses — no post-processing chain, identical in export.
  */
 
 import * as THREE from 'three';
 import type { Project, StyleSettings } from '../timeline/model';
 import type { FrameState } from '../timeline/sampler';
+
+/** Camera distance to the (untilted) video plane — the DoF focus distance. */
+const FOCUS_DIST = 10;
 
 const BACKDROP_VERT = /* glsl */ `
   varying vec2 vUv;
@@ -27,7 +35,22 @@ const BACKDROP_FRAG = /* glsl */ `
   uniform vec3 colorA;
   uniform vec3 colorB;
   uniform float angle;
+  uniform sampler2D image;
+  uniform float useImage;
+  uniform float imageAspect;
+  uniform float viewAspect;
   void main() {
+    if (useImage > 0.5) {
+      // Cover-fit: fill the frame, crop the overflow axis.
+      vec2 uv = vUv - 0.5;
+      if (viewAspect > imageAspect) {
+        uv.y *= imageAspect / viewAspect;
+      } else {
+        uv.x *= viewAspect / imageAspect;
+      }
+      gl_FragColor = vec4(texture2D(image, uv + 0.5).rgb, 1.0);
+      return;
+    }
     vec2 dir = vec2(cos(angle), sin(angle));
     float t = clamp(dot(vUv - 0.5, dir) + 0.5, 0.0, 1.0);
     // Subtle dither to kill gradient banding.
@@ -38,27 +61,60 @@ const BACKDROP_FRAG = /* glsl */ `
 
 const VIDEO_VERT = /* glsl */ `
   varying vec2 vUv;
+  varying float vViewZ;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vViewZ = -mv.z; // positive distance from camera
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
 const VIDEO_FRAG = /* glsl */ `
   varying vec2 vUv;
+  varying float vViewZ;
   uniform sampler2D map;
   uniform vec2 planeSize;   // world units
   uniform float radius;     // world units
-  void main() {
-    vec4 c = texture2D(map, vUv);
-    // Rounded-rect SDF for corner masking with 1px-ish AA.
-    vec2 p = (vUv - 0.5) * planeSize;
+  uniform float dofAmount;  // world blur radius per world unit of defocus; 0 = off
+  uniform float focusDist;  // world units from camera
+
+  // Rounded-rect SDF for corner masking with 1px-ish AA.
+  float rectAlpha(vec2 uv) {
+    vec2 p = (uv - 0.5) * planeSize;
     vec2 b = planeSize * 0.5 - vec2(radius);
     vec2 d = abs(p) - b;
     float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
     float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(-aa, aa, dist);
-    gl_FragColor = vec4(c.rgb, alpha);
+    return 1.0 - smoothstep(-aa, aa, dist);
+  }
+
+  void main() {
+    float coc = dofAmount * abs(vViewZ - focusDist); // circle of confusion, world units
+    coc = min(coc, 0.5);
+
+    if (coc < 0.002) {
+      vec4 c = texture2D(map, vUv);
+      gl_FragColor = vec4(c.rgb, rectAlpha(vUv));
+      return;
+    }
+
+    // 12-tap poisson disc, scaled to a circular kernel in world space.
+    vec2 taps[12] = vec2[](
+      vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696,  0.457),
+      vec2(-0.203,  0.621), vec2( 0.962, -0.195), vec2( 0.473, -0.480),
+      vec2( 0.519,  0.767), vec2( 0.185, -0.893), vec2( 0.507,  0.064),
+      vec2( 0.896,  0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598)
+    );
+    vec2 uvPerWorld = 1.0 / planeSize;
+    vec3 acc = texture2D(map, vUv).rgb;
+    float accA = rectAlpha(vUv);
+    for (int i = 0; i < 12; i++) {
+      vec2 uv = vUv + taps[i] * coc * uvPerWorld;
+      acc += texture2D(map, uv).rgb;
+      accA += rectAlpha(uv);
+    }
+    gl_FragColor = vec4(acc / 13.0, accA / 13.0);
   }
 `;
 
@@ -78,35 +134,76 @@ function makeShadowTexture(): THREE.Texture {
   return tex;
 }
 
-function makeCursorTexture(style: 'default' | 'circle'): THREE.Texture {
+type CursorTexKind = 'default' | 'circle' | 'hand';
+
+/** Sprite anchor (0..1, y from bottom) per cursor art — the hotspot. */
+const CURSOR_HOTSPOT: Record<CursorTexKind, [number, number]> = {
+  default: [0.23, 0.86],
+  circle: [0.5, 0.5],
+  hand: [0.44, 0.9],
+};
+
+/** Outline colour that reads against the fill. */
+function contrastFor(hex: string): string {
+  const n = parseInt(hex.replace('#', '').slice(0, 6), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  return luma > 140 ? 'rgba(0,0,0,0.75)' : '#ffffff';
+}
+
+function makeCursorTexture(kind: CursorTexKind, color: string): THREE.Texture {
   const s = 128;
   const cv = document.createElement('canvas');
   cv.width = s;
   cv.height = s;
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, s, s);
-  if (style === 'circle') {
+  const outline = contrastFor(color);
+  if (kind === 'circle') {
     ctx.beginPath();
     ctx.arc(s / 2, s / 2, s * 0.28, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-    ctx.lineWidth = s * 0.04;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.92;
     ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = s * 0.04;
     ctx.stroke();
+  } else if (kind === 'hand') {
+    // Pointing hand, OS style.
+    const path = new Path2D(
+      'M 56 14 c -5 0 -9 4 -9 9 v 40 l -9 -9 c -4 -4 -10 -4 -14 0 ' +
+        'c -3 4 -3 9 0 13 l 24 26 c 4 4 9 6 14 6 h 20 c 9 0 16 -6 17 -15 ' +
+        'l 5 -28 c 1 -7 -4 -13 -11 -13 h -28 v -20 c 0 -5 -4 -9 -9 -9 z',
+    );
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = color;
+    ctx.fill(path);
+    ctx.restore();
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 5;
+    ctx.lineJoin = 'round';
+    ctx.stroke(path);
+    ctx.fillStyle = color;
+    ctx.fill(path);
   } else {
     // Classic pointer arrow, drawn oversized then rendered small = crisp.
     const path = new Path2D('M 30 18 L 30 96 L 48 78 L 60 104 L 74 98 L 62 72 L 88 72 Z');
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.4)';
     ctx.shadowBlur = 6;
-    ctx.fillStyle = '#111';
+    ctx.fillStyle = color;
     ctx.fill(path);
     ctx.restore();
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = outline;
     ctx.lineWidth = 5;
     ctx.lineJoin = 'round';
     ctx.stroke(path);
-    ctx.fillStyle = '#111';
+    ctx.fillStyle = color;
     ctx.fill(path);
   }
   const tex = new THREE.CanvasTexture(cv);
@@ -144,10 +241,16 @@ export class GlimpseRenderer {
   private ringSprite: THREE.Sprite;
   private videoTexture: THREE.VideoTexture | null = null;
 
+  private backdropImage: THREE.Texture | null = null;
+  private backdropImageSrc: string | null = null;
+
+  private cursorTextures = new Map<string, THREE.Texture>();
+  private activeCursorKey = '';
+  private cursorColor = '#111111';
+
   private planeW = 1;
   private planeH = 1;
   private viewH = 1; // world-space height visible at plane depth
-  private cursorStyle: 'default' | 'circle' = 'default';
 
   constructor(canvas: HTMLCanvasElement, private project: Project) {
     this.renderer = new THREE.WebGLRenderer({
@@ -159,8 +262,8 @@ export class GlimpseRenderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.camera = new THREE.PerspectiveCamera(30, 16 / 9, 0.1, 100);
-    this.camera.position.z = 10;
-    this.viewH = 2 * Math.tan(THREE.MathUtils.degToRad(15)) * 10;
+    this.camera.position.z = FOCUS_DIST;
+    this.viewH = 2 * Math.tan(THREE.MathUtils.degToRad(15)) * FOCUS_DIST;
 
     this.backdrop = new THREE.Mesh(
       new THREE.PlaneGeometry(2, 2),
@@ -171,6 +274,10 @@ export class GlimpseRenderer {
           colorA: { value: new THREE.Color('#1b2a4a') },
           colorB: { value: new THREE.Color('#0b3b39') },
           angle: { value: 0 },
+          image: { value: null },
+          useImage: { value: 0 },
+          imageAspect: { value: 1 },
+          viewAspect: { value: 16 / 9 },
         },
         depthWrite: false,
       }),
@@ -187,6 +294,8 @@ export class GlimpseRenderer {
           map: { value: null },
           planeSize: { value: new THREE.Vector2(1, 1) },
           radius: { value: 0.05 },
+          dofAmount: { value: 0 },
+          focusDist: { value: FOCUS_DIST },
         },
         transparent: true,
       }),
@@ -203,9 +312,8 @@ export class GlimpseRenderer {
     this.shadowPlane.position.z = -0.05;
 
     this.cursorSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: makeCursorTexture('default'), depthTest: false }),
+      new THREE.SpriteMaterial({ map: null, depthTest: false }),
     );
-    this.cursorSprite.center.set(0.23, 0.86); // hotspot at the arrow tip
     this.ringSprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: makeRingTexture(),
@@ -219,6 +327,7 @@ export class GlimpseRenderer {
     this.poseGroup.add(this.zoomGroup);
     this.scene.add(this.poseGroup);
 
+    this.setCursorTexture('default');
     this.applyStyle(project.style);
     this.resize(project.output.width, project.output.height);
   }
@@ -235,6 +344,7 @@ export class GlimpseRenderer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.backdrop.material.uniforms.viewAspect.value = width / height;
     this.layout();
   }
 
@@ -245,6 +355,7 @@ export class GlimpseRenderer {
       style.background.kind === 'solid' ? style.background.colorA : style.background.colorB,
     );
     u.angle.value = THREE.MathUtils.degToRad(style.background.angle);
+    this.applyBackdropImage(style);
 
     this.poseGroup.rotation.set(
       THREE.MathUtils.degToRad(style.pose.rotX),
@@ -254,17 +365,41 @@ export class GlimpseRenderer {
 
     this.shadowPlane.visible = style.shadow;
 
-    if (style.cursor.style !== 'none' && style.cursor.style !== this.cursorStyle) {
-      this.cursorStyle = style.cursor.style;
-      (this.cursorSprite.material.map as THREE.Texture | null)?.dispose();
-      this.cursorSprite.material.map = makeCursorTexture(style.cursor.style);
-      this.cursorSprite.center.set(
-        style.cursor.style === 'circle' ? 0.5 : 0.23,
-        style.cursor.style === 'circle' ? 0.5 : 0.86,
-      );
-      this.cursorSprite.material.needsUpdate = true;
-    }
+    this.cursorColor = style.cursor.color || '#111111';
+
+    // DoF: blur radius grows with world-space distance from the focus plane.
+    this.videoPlane.material.uniforms.dofAmount.value = style.dof.enabled
+      ? style.dof.strength * 0.28
+      : 0;
+
     this.layout();
+  }
+
+  private applyBackdropImage(style: StyleSettings): void {
+    const u = this.backdrop.material.uniforms;
+    const src = style.background.kind === 'image' ? style.background.imageData ?? null : null;
+    if (!src) {
+      u.useImage.value = 0;
+      return;
+    }
+    if (src === this.backdropImageSrc) {
+      u.useImage.value = 1;
+      return;
+    }
+    this.backdropImageSrc = src;
+    const img = new Image();
+    img.onload = () => {
+      if (this.backdropImageSrc !== src) return; // superseded meanwhile
+      this.backdropImage?.dispose();
+      const tex = new THREE.Texture(img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      this.backdropImage = tex;
+      u.image.value = tex;
+      u.imageAspect.value = img.width / img.height;
+      u.useImage.value = 1;
+    };
+    img.src = src;
   }
 
   /** Fit the recording into view with padding; size the shadow and radius. */
@@ -292,6 +427,20 @@ export class GlimpseRenderer {
     uniforms.radius.value = (style.cornerRadius / recording.height) * h;
   }
 
+  private setCursorTexture(kind: CursorTexKind): void {
+    const key = `${kind}:${this.cursorColor}`;
+    if (key === this.activeCursorKey) return;
+    this.activeCursorKey = key;
+    let tex = this.cursorTextures.get(key);
+    if (!tex) {
+      tex = makeCursorTexture(kind, this.cursorColor);
+      this.cursorTextures.set(key, tex);
+    }
+    this.cursorSprite.material.map = tex;
+    this.cursorSprite.center.set(...CURSOR_HOTSPOT[kind]);
+    this.cursorSprite.material.needsUpdate = true;
+  }
+
   /** Render one frame from sampled state. Pure function of its input. */
   render(frame: FrameState): void {
     const { camera, cursor } = frame;
@@ -304,9 +453,12 @@ export class GlimpseRenderer {
     );
 
     const style = this.project.style;
-    this.cursorSprite.visible = cursor.visible;
+    this.cursorSprite.visible = cursor.visible && style.cursor.style !== 'none';
     this.ringSprite.visible = cursor.visible && cursor.clickPulse > 0;
     if (cursor.visible) {
+      if (style.cursor.style === 'circle') this.setCursorTexture('circle');
+      else this.setCursorTexture(cursor.hand ? 'hand' : 'default');
+
       const cx = (cursor.x - 0.5) * this.planeW;
       const cy = (0.5 - cursor.y) * this.planeH;
       const size = 0.032 * this.viewH * style.cursor.size;
@@ -327,6 +479,8 @@ export class GlimpseRenderer {
 
   dispose(): void {
     this.videoTexture?.dispose();
+    this.backdropImage?.dispose();
+    this.cursorTextures.forEach((t) => t.dispose());
     this.renderer.dispose();
   }
 }

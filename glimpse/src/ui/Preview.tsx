@@ -1,15 +1,20 @@
 import { useEffect, useRef } from 'react';
 import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
-import { sampleFrame } from '../timeline/sampler';
+import { sampleFrame, speedAt } from '../timeline/sampler';
 import { loadRecordingVideo } from '../export/exporter';
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 /**
  * Live preview. The recording plays in a hidden <video>; every animation
  * frame we sample the timeline at video.currentTime and hand it to the same
  * renderer the exporter uses. What you preview is literally what you export.
+ *
+ * Dragging the canvas pans the selected zoom (or the zoom under the
+ * playhead) — direct-manipulation framing.
  */
-export function Preview() {
+export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<GlimpseRenderer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -43,12 +48,23 @@ export function Preview() {
       const loop = () => {
         if (disposed) return;
         const st = useGlimpse.getState();
+        const current = st.project ?? project;
         const tMs = st.playing ? video.currentTime * 1000 : st.playhead;
         if (st.playing) {
           st.setPlayhead(tMs);
-          if (video.ended || tMs >= project.recording.duration) st.setPlaying(false);
+          // Clip speeds drive the preview's playback rate live, so a 0.5×
+          // slow pass previews exactly as it exports.
+          video.playbackRate = speedAt(current.zooms, tMs);
+          const trimEnd = current.trim?.end ?? current.recording.duration;
+          if (video.ended || tMs >= trimEnd) {
+            if (st.loop) {
+              video.currentTime = (current.trim?.start ?? 0) / 1000;
+              void video.play();
+            } else {
+              st.setPlaying(false);
+            }
+          }
         }
-        const current = st.project ?? project;
         renderer.render(sampleFrame(current, tMs));
         raf = requestAnimationFrame(loop);
       };
@@ -81,7 +97,7 @@ export function Preview() {
     const video = videoRef.current;
     if (!video) return;
     if (playing) {
-      video.currentTime = playhead / 1000;
+      video.currentTime = useGlimpse.getState().playhead / 1000;
       void video.play();
     } else {
       video.pause();
@@ -95,9 +111,62 @@ export function Preview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playhead]);
 
+  /** The zoom a canvas drag should reframe. */
+  const panTarget = () => {
+    const st = useGlimpse.getState();
+    const p = st.project;
+    if (!p) return null;
+    const z =
+      p.zooms.find((z) => z.id === selectedZoom) ??
+      p.zooms.find((z) => st.playhead >= z.start && st.playhead <= z.end) ??
+      null;
+    return z && !z.follow ? z : null;
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    const zoom = panTarget();
+    const canvas = canvasRef.current;
+    if (!zoom || !canvas) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    let last = { x: e.clientX, y: e.clientY };
+
+    const move = (ev: PointerEvent) => {
+      const dx = (ev.clientX - last.x) / rect.width;
+      const dy = (ev.clientY - last.y) / rect.height;
+      last = { x: ev.clientX, y: ev.clientY };
+      const st = useGlimpse.getState();
+      const cur = st.project?.zooms.find((z) => z.id === zoom.id);
+      if (!cur) return;
+      const s = Math.max(cur.scale, 1e-3);
+      st.updateZoom(zoom.id, {
+        focusX: clamp01(cur.focusX - dx / s),
+        focusY: clamp01(cur.focusY - dy / s),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const pannable =
+    !!project &&
+    !!(
+      project.zooms.find((z) => z.id === selectedZoom) ??
+      project.zooms.find((z) => playhead >= z.start && playhead <= z.end)
+    );
+
   return (
     <div className="preview-wrap">
-      <canvas ref={canvasRef} className="preview-canvas" />
+      <canvas
+        ref={canvasRef}
+        className={`preview-canvas${pannable ? ' pannable' : ''}`}
+        onPointerDown={onPointerDown}
+        title={pannable ? 'Drag to pan the zoom framing' : undefined}
+      />
     </div>
   );
 }

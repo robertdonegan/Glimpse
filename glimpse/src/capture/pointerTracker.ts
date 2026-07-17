@@ -16,6 +16,22 @@ export interface PointerLog {
   clicks: ClickEvent[];
 }
 
+const INTERACTIVE_SELECTOR =
+  'a, button, [role="button"], [role="link"], [role="tab"], [role="menuitem"], ' +
+  'input, select, textarea, label, summary, [onclick], [contenteditable="true"]';
+
+/** Should the recorded cursor show as a hand here? Mirrors CSS `cursor: pointer`. */
+function isInteractive(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  if (!el) return false;
+  if (el.closest(INTERACTIVE_SELECTOR)) return true;
+  try {
+    return window.getComputedStyle(el).cursor === 'pointer';
+  } catch {
+    return false;
+  }
+}
+
 export class PointerTracker {
   private cursor: CursorSample[] = [];
   private clicks: ClickEvent[] = [];
@@ -35,6 +51,7 @@ export class PointerTracker {
       t,
       x: e.clientX / window.innerWidth,
       y: e.clientY / window.innerHeight,
+      hand: isInteractive(e.target),
     });
   };
 

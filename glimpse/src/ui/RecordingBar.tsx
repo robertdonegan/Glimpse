@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useGlimpse } from '../state/store';
+import { isTauri } from '../capture/nativeCapture';
 
 function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -28,8 +29,9 @@ export function RecordingBar() {
         </button>
       </div>
       <p>
-        Recording in progress. Switch to the tab or window you're demoing — come back
-        here (or use the browser's own stop control) to finish.
+        {isTauri()
+          ? 'Recording your screen — cursor is captured as data. Come back here to finish.'
+          : "Recording in progress. Switch to the tab or window you're demoing — come back here (or use the browser's own stop control) to finish."}
       </p>
     </div>
   );

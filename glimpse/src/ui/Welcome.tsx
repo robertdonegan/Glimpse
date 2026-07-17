@@ -1,39 +1,40 @@
 import { useState } from 'react';
 import { useGlimpse } from '../state/store';
+import { isTauri } from '../capture/nativeCapture';
 
-/** Six-blade aperture iris — the Glimpse mark. */
-function ApertureMark() {
-  const blades = Array.from({ length: 6 }, (_, i) => {
-    const a = (i * 60 * Math.PI) / 180;
-    const x1 = 50 + 34 * Math.cos(a);
-    const y1 = 50 + 34 * Math.sin(a);
-    const x2 = 50 + 34 * Math.cos(a + (110 * Math.PI) / 180);
-    const y2 = 50 + 34 * Math.sin(a + (110 * Math.PI) / 180);
-    return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} />;
-  });
+/** Play triangle — tap to record. */
+function PlayMark() {
   return (
-    <svg width="72" height="72" viewBox="0 0 100 100" aria-hidden="true">
-      <g stroke="var(--amber)" strokeWidth="3.4" strokeLinecap="round">
-        {blades}
-      </g>
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 5.5 L18 12 L8 18.5 Z" fill="currentColor" />
     </svg>
   );
 }
 
 export function Welcome() {
   const startRecording = useGlimpse((s) => s.startRecording);
+  const startNativeRecording = useGlimpse((s) => s.startNativeRecording);
+  const openProject = useGlimpse((s) => s.openProject);
   const [error, setError] = useState<string | null>(null);
+  const [audio, setAudio] = useState(false);
+  const native = isTauri();
   const supported =
-    typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
+    native ||
+    (typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia);
 
   const begin = async (preferCurrentTab: boolean) => {
     setError(null);
     try {
-      await startRecording(preferCurrentTab);
+      if (native) await startNativeRecording(audio);
+      else await startRecording(preferCurrentTab, audio);
     } catch (e) {
       // User dismissed the picker — not an error worth shouting about.
       if ((e as DOMException)?.name === 'NotAllowedError') return;
-      setError('Recording could not start. Check screen-sharing permissions and try again.');
+      setError(
+        native
+          ? `${e instanceof Error ? e.message : String(e)}`
+          : 'Recording could not start. Check screen-sharing permissions and try again.',
+      );
     }
   };
 
@@ -41,41 +42,43 @@ export function Welcome() {
     <div className="welcome">
       <div className="welcome-inner">
         <span className="wordmark">Glimpse</span>
-        <h1>
-          Record a glimpse.
-          <br />
-          Ship it <em>beautiful</em>.
-        </h1>
-        <p className="lede">
-          Screen recordings with a synthetic cursor, click-aware auto-zoom and 3D hero
-          shots — edited after you record, entirely in your browser.
-        </p>
 
-        <button className="aperture" onClick={() => begin(true)} aria-label="Start recording this tab">
-          <ApertureMark />
+        <button
+          className="aperture"
+          onClick={() => begin(true)}
+          aria-label={native ? 'Start native screen recording' : 'Start recording this tab'}
+        >
+          <PlayMark />
         </button>
-        <div className="timecode">Tap the aperture to record this tab</div>
 
-        <div className="capture-options">
-          <button className="capture-option" onClick={() => begin(true)}>
-            <span className="tag">FULL CURSOR MAGIC</span>
-            <strong>Record this tab</strong>
-            <span>
-              Cursor and clicks are captured as data — restyle, resize and smooth the
-              cursor after recording. Auto-zoom included.
-            </span>
-          </button>
-          <button className="capture-option" onClick={() => begin(false)}>
-            <span className="tag" style={{ color: 'var(--text-dim)', background: 'var(--panel-raised)' }}>
-              PIXELS ONLY
-            </span>
-            <strong>Window or screen</strong>
-            <span>
-              Records any app. Zoom, backgrounds and 3D still apply, but the cursor is
-              baked into the footage.
-            </span>
-          </button>
-        </div>
+        {native ? (
+          <div className="capture-options">
+            <button className="capture-option" onClick={() => begin(true)}>
+              <strong>Record screen</strong>
+              <span>Native capture — cursor as data, any app</span>
+            </button>
+          </div>
+        ) : (
+          <div className="capture-options">
+            <button className="capture-option" onClick={() => begin(true)}>
+              <strong>This tab</strong>
+              <span>Cursor as data — restyle after</span>
+            </button>
+            <button className="capture-option" onClick={() => begin(false)}>
+              <strong>Window / screen</strong>
+              <span>Any app, cursor baked in</span>
+            </button>
+          </div>
+        )}
+
+        <label className="audio-toggle">
+          <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} />
+          Capture audio
+        </label>
+
+        <button className="btn quiet open-project" onClick={() => void openProject()}>
+          Open project…
+        </button>
 
         {!supported && (
           <p className="unsupported">
