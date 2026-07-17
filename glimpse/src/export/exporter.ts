@@ -168,7 +168,11 @@ export async function exportProject(
   renderer.attachVideo(video);
 
   const withAudio = audioExportable(project);
-  const audio = withAudio ? await decodeAudio(project.recording.blob) : null;
+  // Prefer the dedicated audio-only blob — decodeAudioData is unreliable on
+  // video containers.
+  const audio = withAudio
+    ? await decodeAudio(project.recording.audioBlob ?? project.recording.blob)
+    : null;
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),

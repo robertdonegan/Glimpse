@@ -110,9 +110,10 @@ const VIDEO_FRAG = /* glsl */ `
       return;
     }
 
-    // Vogel spiral bokeh with per-pixel rotation — smooth, no visible taps.
-    const int TAPS = 24;
-    float rot = 6.2831853 *
+    // Vogel spiral bokeh. Jitter stays within one tap spacing — enough to
+    // break banding without dissolving into grain.
+    const int TAPS = 32;
+    float rot = (6.2831853 / float(TAPS)) *
       fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     vec2 uvPerWorld = 1.0 / planeSize;
     vec3 acc = texture2D(map, vUv).rgb;

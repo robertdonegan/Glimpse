@@ -2,6 +2,9 @@
  * Turns a live CaptureSession into a Recording. The raw capture is stored
  * losslessly-ish at a high bitrate — it is source material, not the final
  * output. The exporter re-renders it with effects applied.
+ *
+ * Audio is captured to a second, audio-only MediaRecorder: decodeAudioData
+ * chokes on video containers, so the exporter needs a clean opus blob.
  */
 
 import type { Recording } from '../timeline/model';
@@ -30,7 +33,8 @@ function pickMimeType(withAudio: boolean): string {
 /**
  * While capturing our own tab, hide the real OS cursor page-wide so the
  * synthetic cursor is the only one in the pixels. Only possible for pages we
- * control — which is exactly the tab-recording case.
+ * control — which is exactly the current-tab case. The recording bar opts
+ * back in via CSS so "Stop & edit" stays clickable.
  */
 function hideNativeCursor(): () => void {
   const style = document.createElement('style');
@@ -57,13 +61,33 @@ export async function beginRecording(opts: {
   const recorder = new MediaRecorder(session.stream, {
     mimeType: mimeType || undefined,
     videoBitsPerSecond: 40_000_000, // generous — this is our master copy
-    audioBitsPerSecond: hasAudio ? 256_000 : undefined,
   });
 
+  // Audio rides in its own recorder so the exporter can decode it cleanly.
+  const audioChunks: BlobPart[] = [];
+  let audioRecorder: MediaRecorder | null = null;
+  if (hasAudio) {
+    const audioStream = new MediaStream(session.stream.getAudioTracks());
+    audioRecorder = new MediaRecorder(audioStream, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined,
+      audioBitsPerSecond: 256_000,
+    });
+    audioRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+    audioRecorder.start(250);
+  }
+
+  // Pointer telemetry only means anything when the pixels are OUR tab.
+  // (Picking another tab in the share sheet also reports mode 'tab', but we
+  // can't observe its pointer — overlaying our own would lie.)
+  const ownTab = session.mode === 'tab' && !!opts.preferCurrentTab;
   const tracker = new PointerTracker();
   const startTime = performance.now();
   let restoreCursor: (() => void) | null = null;
-  if (session.mode === 'tab') {
+  if (ownTab) {
     tracker.start(startTime);
     restoreCursor = hideNativeCursor();
   }
@@ -76,30 +100,37 @@ export async function beginRecording(opts: {
   let endedCb: (() => void) | null = null;
   session.stream.getVideoTracks()[0].addEventListener('ended', () => endedCb?.());
 
-  const stop = (): Promise<Recording> =>
-    new Promise((resolve) => {
-      recorder.onstop = () => {
-        restoreCursor?.();
-        const duration = performance.now() - startTime;
-        const log =
-          session.mode === 'tab'
-            ? tracker.stop()
-            : { cursor: [], clicks: [] };
-        session.stream.getTracks().forEach((t) => t.stop());
-        resolve({
-          blob: new Blob(chunks, { type: mimeType || 'video/webm' }),
-          mimeType: mimeType || 'video/webm',
-          width: session.width,
-          height: session.height,
-          duration,
-          mode: session.mode,
-          cursor: log.cursor,
-          clicks: log.clicks,
-          hasAudio,
-        });
-      };
+  const stop = (): Promise<Recording> => {
+    const audioDone = new Promise<void>((res) => {
+      if (!audioRecorder || audioRecorder.state === 'inactive') return res();
+      audioRecorder.onstop = () => res();
+      audioRecorder.stop();
+    });
+    const videoDone = new Promise<void>((res) => {
+      recorder.onstop = () => res();
       recorder.stop();
     });
+    return Promise.all([audioDone, videoDone]).then(() => {
+      restoreCursor?.();
+      const duration = performance.now() - startTime;
+      const log = ownTab ? tracker.stop() : { cursor: [], clicks: [] };
+      session.stream.getTracks().forEach((t) => t.stop());
+      return {
+        blob: new Blob(chunks, { type: mimeType || 'video/webm' }),
+        mimeType: mimeType || 'video/webm',
+        width: session.width,
+        height: session.height,
+        duration,
+        mode: session.mode,
+        cursor: log.cursor,
+        clicks: log.clicks,
+        hasAudio,
+        audioBlob: hasAudio
+          ? new Blob(audioChunks, { type: 'audio/webm' })
+          : undefined,
+      };
+    });
+  };
 
   return {
     stop,

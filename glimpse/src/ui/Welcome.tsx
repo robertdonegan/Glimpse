@@ -65,8 +65,8 @@ export function Welcome() {
               <span>Cursor as data — restyle after</span>
             </button>
             <button className="capture-option" onClick={() => begin(false)}>
-              <strong>Window / screen</strong>
-              <span>Any app, cursor baked in</span>
+              <strong>Other tab / window / screen</strong>
+              <span>Pick anything in the share sheet — cursor baked in</span>
             </button>
           </div>
         )}

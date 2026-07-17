@@ -195,6 +195,17 @@ button {
   padding: 10px 12px 10px 20px;
 }
 
+/* The recorder hides the cursor page-wide while capturing this tab; the
+   stop control must stay clickable, so it opts back in. */
+.recording-bar,
+.recording-bar * {
+  cursor: auto !important;
+}
+
+.recording-bar .stop-btn {
+  cursor: pointer !important;
+}
+
 .rec-dot {
   width: 10px;
   height: 10px;

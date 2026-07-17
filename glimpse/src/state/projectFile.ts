@@ -13,7 +13,7 @@ import type { Project, Recording } from '../timeline/model';
 import { normalizeProject } from '../timeline/model';
 
 const MAGIC = 0x474c4d50; // "GLMP"
-const VERSION = 1;
+const VERSION = 2;
 
 interface ProjectMeta {
   version: number;
@@ -23,11 +23,14 @@ interface ProjectMeta {
   style: Project['style'];
   output: Project['output'];
   trim?: Project['trim'];
-  recording: Omit<Recording, 'blob'>;
+  recording: Omit<Recording, 'blob' | 'audioBlob'>;
+  /** v2: byte length of the video segment (audio follows it). */
+  videoSize?: number;
+  audioSize?: number;
 }
 
 export function serializeProject(p: Project): Blob {
-  const { blob, ...recMeta } = p.recording;
+  const { blob, audioBlob, ...recMeta } = p.recording;
   const meta: ProjectMeta = {
     version: VERSION,
     name: p.name,
@@ -37,13 +40,17 @@ export function serializeProject(p: Project): Blob {
     output: p.output,
     trim: p.trim,
     recording: recMeta,
+    videoSize: blob.size,
+    audioSize: audioBlob?.size ?? 0,
   };
   const json = new TextEncoder().encode(JSON.stringify(meta));
   const head = new ArrayBuffer(8);
   const dv = new DataView(head);
   dv.setUint32(0, MAGIC);
   dv.setUint32(4, json.byteLength);
-  return new Blob([head, json, blob], { type: 'application/octet-stream' });
+  const parts: BlobPart[] = [head, json, blob];
+  if (audioBlob) parts.push(audioBlob);
+  return new Blob(parts, { type: 'application/octet-stream' });
 }
 
 export async function deserializeProject(file: Blob): Promise<Project> {
@@ -53,7 +60,16 @@ export async function deserializeProject(file: Blob): Promise<Project> {
   const jsonLen = dv.getUint32(4);
   const jsonBuf = await file.slice(8, 8 + jsonLen).arrayBuffer();
   const meta = JSON.parse(new TextDecoder().decode(jsonBuf)) as ProjectMeta;
-  const videoBlob = file.slice(8 + jsonLen, file.size, meta.recording.mimeType);
+
+  const videoStart = 8 + jsonLen;
+  // v1 files: everything after the JSON is video. v2: explicit sizes.
+  const videoEnd = meta.videoSize ? videoStart + meta.videoSize : file.size;
+  const videoBlob = file.slice(videoStart, videoEnd, meta.recording.mimeType);
+  const audioBlob =
+    meta.audioSize && meta.audioSize > 0
+      ? file.slice(videoEnd, videoEnd + meta.audioSize, 'audio/webm')
+      : undefined;
+
   return normalizeProject({
     name: meta.name,
     zooms: meta.zooms,
@@ -61,7 +77,7 @@ export async function deserializeProject(file: Blob): Promise<Project> {
     style: meta.style,
     output: meta.output,
     trim: meta.trim,
-    recording: { ...meta.recording, blob: videoBlob },
+    recording: { ...meta.recording, blob: videoBlob, audioBlob },
   } as Project);
 }
 

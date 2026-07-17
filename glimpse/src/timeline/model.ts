@@ -45,6 +45,12 @@ export interface Recording {
   clicks: ClickEvent[];
   /** Whether the capture stream included an audio track. */
   hasAudio: boolean;
+  /**
+   * Audio-only sidecar recording (webm/opus). Browsers can't reliably
+   * decode audio out of a video container, so audio is captured to its own
+   * blob alongside the video.
+   */
+  audioBlob?: Blob;
 }
 
 /** A keyframed zoom region on the timeline. */

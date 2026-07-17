@@ -43,6 +43,10 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     void loadRecordingVideo(project.recording.blob).then((video) => {
       if (disposed) return;
       videoRef.current = video;
+      // loadRecordingVideo mutes for its duration probe — the preview should
+      // be audible.
+      video.muted = false;
+      video.volume = 1;
       renderer.attachVideo(video);
 
       const loop = () => {
