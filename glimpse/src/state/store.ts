@@ -67,6 +67,9 @@ interface GlimpseState {
   togglePlay: () => void;
   toggleLoop: () => void;
   setTrim: (patch: Partial<Project['trim']>) => void;
+  /** Remove a source-time range from playback + export. */
+  addCut: (start: number, end: number) => void;
+  removeCut: (index: number) => void;
 
   updateStyle: (patch: Partial<StyleSettings>) => void;
   patchStyle: <K extends keyof StyleSettings>(key: K, value: StyleSettings[K]) => void;
@@ -86,6 +89,8 @@ interface GlimpseState {
   setPreviewRate: (rate: number) => void;
 
   runExport: () => Promise<void>;
+  /** Abort an in-progress MP4 export. */
+  cancelExport: () => void;
   exportPng: (scale?: number) => Promise<void>;
 }
 
@@ -100,6 +105,27 @@ function normaliseZooms(zooms: ZoomSegment[], duration: number): ZoomSegment[] {
     if (next && z.end > next.start) z.end = next.start;
   }
   return sorted;
+}
+
+/** Keep cuts clamped, sorted and merged so they never overlap. */
+function normaliseCuts(
+  cuts: { start: number; end: number }[],
+  duration: number,
+): { start: number; end: number }[] {
+  const clamped = cuts
+    .map((c) => ({
+      start: Math.max(0, Math.min(c.start, duration)),
+      end: Math.max(0, Math.min(c.end, duration)),
+    }))
+    .filter((c) => c.end - c.start >= 50)
+    .sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const c of clamped) {
+    const prev = merged[merged.length - 1];
+    if (prev && c.start <= prev.end) prev.end = Math.max(prev.end, c.end);
+    else merged.push({ ...c });
+  }
+  return merged;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -122,6 +148,8 @@ const COALESCE_MS = 350;
 
 export const useGlimpse = create<GlimpseState>((set, get) => {
   let lastCommit = 0;
+  /** Live export controller, so the UI can cancel a render mid-flight. */
+  let exportAbort: AbortController | null = null;
 
   /**
    * Apply a project change while recording an undo step. Rapid successive
@@ -317,6 +345,19 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     commit({ ...p, trim: t });
   },
 
+  addCut: (start, end) => {
+    const p = get().project;
+    if (!p) return;
+    const d = p.recording.duration;
+    commit({ ...p, cuts: normaliseCuts([...(p.cuts ?? []), { start, end }], d) });
+  },
+
+  removeCut: (index) => {
+    const p = get().project;
+    if (!p) return;
+    commit({ ...p, cuts: (p.cuts ?? []).filter((_, i) => i !== index) });
+  },
+
   updateStyle: (patch) => {
     const p = get().project;
     if (!p) return;
@@ -441,14 +482,26 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
   runExport: async () => {
     const p = get().project;
     if (!p || get().exporting) return;
+    const controller = new AbortController();
+    exportAbort = controller;
     set({ exporting: true, exportProgress: null, playing: false });
     try {
-      const result = await exportProject(p, (exportProgress) => set({ exportProgress }));
+      const result = await exportProject(
+        p,
+        (exportProgress) => set({ exportProgress }),
+        controller.signal,
+      );
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.${result.extension}`);
+    } catch (e) {
+      // Cancellation is expected, not an error worth surfacing.
+      if ((e as DOMException)?.name !== 'AbortError') throw e;
     } finally {
+      exportAbort = null;
       set({ exporting: false, exportProgress: null });
     }
   },
+
+  cancelExport: () => exportAbort?.abort(),
 
   exportPng: async (scale = 2) => {
     const { project, playhead, exporting } = get();

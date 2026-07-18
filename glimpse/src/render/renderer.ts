@@ -131,6 +131,36 @@ const VIDEO_FRAG = /* glsl */ `
   }
 `;
 
+// Redaction blur: samples the video texture over a sub-rect and box-blurs it,
+// clamped to the region so nothing outside leaks in.
+const REGION_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const REGION_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D map;
+  uniform vec2 uvOrigin;
+  uniform vec2 uvSize;
+  void main() {
+    vec2 stp = uvSize * 0.055;
+    vec2 base = uvOrigin + vUv * uvSize;
+    vec3 acc = vec3(0.0);
+    for (int i = -3; i <= 3; i++) {
+      for (int j = -3; j <= 3; j++) {
+        vec2 uv = base + vec2(float(i), float(j)) * stp;
+        uv = clamp(uv, uvOrigin, uvOrigin + uvSize);
+        acc += texture2D(map, uv).rgb;
+      }
+    }
+    gl_FragColor = vec4(acc / 49.0, 1.0);
+  }
+`;
+
 function makeShadowTexture(): THREE.Texture {
   const s = 256;
   const cv = document.createElement('canvas');
@@ -306,6 +336,9 @@ export class GlimpseRenderer {
   private overlays = new Map<string, OverlayNode>();
   private overlayList: Overlay[] = [];
 
+  /** Redaction blur quads, one per style.blur region. */
+  private blurMeshes: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>[] = [];
+
   /** In-flight async texture decodes — awaited by whenReady() before export. */
   private pending: Promise<unknown>[] = [];
 
@@ -316,13 +349,20 @@ export class GlimpseRenderer {
   private planeH = 1;
   private viewH = 1; // world-space height visible at plane depth
 
-  constructor(canvas: HTMLCanvasElement, private project: Project) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    private project: Project,
+    opts: { preserveDrawingBuffer?: boolean } = {},
+  ) {
     this.style = project.style;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
       alpha: false,
-      preserveDrawingBuffer: true, // exporter reads frames back
+      // The exporter reads frames back so it needs the buffer preserved; the
+      // live preview does not, and preserving it makes some GPU drivers show
+      // faint vertical tiling seams. Default on, off for preview.
+      preserveDrawingBuffer: opts.preserveDrawingBuffer ?? true,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -416,7 +456,38 @@ export class GlimpseRenderer {
     this.videoTexture = new THREE.VideoTexture(video);
     this.videoTexture.colorSpace = THREE.SRGBColorSpace;
     this.videoTexture.minFilter = THREE.LinearFilter;
+    this.videoTexture.magFilter = THREE.LinearFilter;
+    this.videoTexture.generateMipmaps = false;
+    // Sharper, seam-free sampling when the plane is scaled/tilted.
+    this.videoTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     this.videoPlane.material.uniforms.map.value = this.videoTexture;
+    for (const m of this.blurMeshes) m.material.uniforms.map.value = this.videoTexture;
+  }
+
+  /** Match the blur-quad pool to the redaction region list. */
+  private syncBlurRegions(regions: { x: number; y: number; w: number; h: number }[]): void {
+    while (this.blurMeshes.length > regions.length) {
+      const m = this.blurMeshes.pop()!;
+      m.removeFromParent();
+      m.material.dispose();
+    }
+    while (this.blurMeshes.length < regions.length) {
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.ShaderMaterial({
+          vertexShader: REGION_VERT,
+          fragmentShader: REGION_FRAG,
+          uniforms: {
+            map: { value: this.videoTexture },
+            uvOrigin: { value: new THREE.Vector2() },
+            uvSize: { value: new THREE.Vector2(1, 1) },
+          },
+        }),
+      );
+      mesh.renderOrder = 3; // above the video plane, below overlays/cursor
+      this.zoomGroup.add(mesh);
+      this.blurMeshes.push(mesh);
+    }
   }
 
   resize(width: number, height: number): void {
@@ -448,6 +519,7 @@ export class GlimpseRenderer {
       ? style.dof.strength * 0.28
       : 0;
 
+    this.syncBlurRegions(style.blur ?? []);
     this.layout();
   }
 
@@ -623,6 +695,27 @@ export class GlimpseRenderer {
       0,
     );
 
+    // Redaction blur regions pinned to the recording.
+    const blur = this.style.blur ?? [];
+    for (let i = 0; i < this.blurMeshes.length; i++) {
+      const r = blur[i];
+      const mesh = this.blurMeshes[i];
+      if (!r) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.visible = true;
+      mesh.scale.set(r.w * this.planeW, r.h * this.planeH, 1);
+      mesh.position.set(
+        (r.x + r.w / 2 - 0.5) * this.planeW,
+        (0.5 - (r.y + r.h / 2)) * this.planeH,
+        0.02,
+      );
+      const u = mesh.material.uniforms;
+      u.uvOrigin.value.set(r.x, 1 - (r.y + r.h));
+      u.uvSize.value.set(r.w, r.h);
+    }
+
     // Overlays: visible inside their time window.
     for (const o of this.overlayList) {
       const node = this.overlays.get(o.id);
@@ -683,6 +776,7 @@ export class GlimpseRenderer {
   dispose(): void {
     this.videoTexture?.dispose();
     this.backdropImage?.dispose();
+    for (const m of this.blurMeshes) m.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
     for (const node of this.overlays.values()) {
       (node.mesh.material.map as THREE.Texture | null)?.dispose();

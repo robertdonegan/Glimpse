@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
-import { outputDuration } from '../timeline/sampler';
+import { buildTimeline, outputDuration } from '../timeline/sampler';
 
 /** Peak data per blob, computed once. */
 const peaksCache = new WeakMap<Blob, Float32Array>();
@@ -82,6 +82,8 @@ export function Timeline({
   const loop = useGlimpse((s) => s.loop);
   const toggleLoop = useGlimpse((s) => s.toggleLoop);
   const setTrim = useGlimpse((s) => s.setTrim);
+  const addCut = useGlimpse((s) => s.addCut);
+  const removeCut = useGlimpse((s) => s.removeCut);
   const addZoomAt = useGlimpse((s) => s.addZoomAt);
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const applyAutoZoom = useGlimpse((s) => s.applyAutoZoom);
@@ -94,10 +96,12 @@ export function Timeline({
 
   const trackRef = useRef<HTMLDivElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
+  const [cutDrag, setCutDrag] = useState<{ start: number; end: number } | null>(null);
 
   if (!project) return null;
   const duration = project.recording.duration;
-  const outDuration = outputDuration(project.zooms, duration);
+  const outDuration = outputDuration(buildTimeline(project));
+  const cuts = project.cuts ?? [];
   const frameMs = 1000 / project.output.fps;
 
   const timeAt = (clientX: number): number => {
@@ -117,8 +121,36 @@ export function Timeline({
     window.addEventListener('pointerup', up);
   };
 
+  /** Shift-drag a region to cut it out of playback + export. */
+  const startCutDrag = (clientX: number) => {
+    const start = timeAt(clientX);
+    setCutDrag({ start, end: start });
+    const move = (ev: PointerEvent) => setCutDrag({ start, end: timeAt(ev.clientX) });
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      const end = timeAt(ev.clientX);
+      setCutDrag(null);
+      const a = Math.min(start, end);
+      const b = Math.max(start, end);
+      if (b - a >= 50) addCut(a, b);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   const onTrackPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('.zoom-seg, .trim-handle, .playhead-grip')) return;
+    if (
+      (e.target as HTMLElement).closest(
+        '.zoom-seg, .trim-handle, .playhead-grip, .cut-block',
+      )
+    )
+      return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      startCutDrag(e.clientX);
+      return;
+    }
     onSelectZoom(null);
     scrubFrom(e.clientX);
   };
@@ -231,8 +263,14 @@ export function Timeline({
         <div className="timecode">
           <strong>{tc(playhead)}</strong> / {tc(duration)}
           {Math.abs(outDuration - duration) > 1 && (
-            <span title="Output duration after clip speeds"> → {tc(outDuration)}</span>
+            <span title="Output duration after trim, cuts & clip speeds">
+              {' '}
+              → {tc(outDuration)}
+            </span>
           )}
+          <span className="cut-hint" title="Hold Shift and drag across the timeline to cut a section out">
+            ⇧-drag to cut
+          </span>
         </div>
         <div className="timeline-actions">
           <div className="transport" role="group" aria-label="Transport">
@@ -324,17 +362,21 @@ export function Timeline({
               e.target.value = '';
             }}
           />
-          <select
-            className="rate-select"
-            value={previewRate}
-            onChange={(e) => setPreviewRate(Number(e.target.value))}
+          <label
+            className="rate-slider"
             title="Preview playback speed (slow viewing only — export is unaffected)"
-            aria-label="Preview playback speed"
           >
-            <option value={1}>1×</option>
-            <option value={0.5}>0.5×</option>
-            <option value={0.25}>0.25×</option>
-          </select>
+            <input
+              type="range"
+              min={0.1}
+              max={2}
+              step={0.05}
+              value={previewRate}
+              onChange={(e) => setPreviewRate(Number(e.target.value))}
+              aria-label="Preview playback speed"
+            />
+            <span>{previewRate.toFixed(2)}×</span>
+          </label>
         </div>
       </div>
 
@@ -397,6 +439,35 @@ export function Timeline({
           onPointerDown={(e) => onTrimPointerDown(e, 'end')}
           title="Drag the out-point"
         />
+        {cuts.map((c, i) => (
+          <div
+            key={`cut-${i}`}
+            className="cut-block"
+            style={{
+              left: `${(c.start / duration) * 100}%`,
+              width: `${((c.end - c.start) / duration) * 100}%`,
+            }}
+            title="Cut — removed from playback & export. Click × to restore."
+          >
+            <button
+              className="cut-remove"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => removeCut(i)}
+              aria-label="Restore cut"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {cutDrag && Math.abs(cutDrag.end - cutDrag.start) > 1 && (
+          <div
+            className="cut-block preview"
+            style={{
+              left: `${(Math.min(cutDrag.start, cutDrag.end) / duration) * 100}%`,
+              width: `${(Math.abs(cutDrag.end - cutDrag.start) / duration) * 100}%`,
+            }}
+          />
+        )}
         <div className="playhead" style={{ left: `${(playhead / duration) * 100}%` }} />
         <div
           className="playhead-grip"

@@ -23,6 +23,7 @@ interface ProjectMeta {
   style: Project['style'];
   output: Project['output'];
   trim?: Project['trim'];
+  cuts?: Project['cuts'];
   recording: Omit<Recording, 'blob' | 'audioBlob'>;
   /** v2+: byte length of the video segment (audio follows it). */
   videoSize?: number;
@@ -42,6 +43,7 @@ export function serializeProject(p: Project): Blob {
     style: p.style,
     output: p.output,
     trim: p.trim,
+    cuts: p.cuts,
     recording: recMeta,
     videoSize: blob.size,
     audioSize: audioBlob?.size ?? 0,
@@ -95,6 +97,7 @@ export async function deserializeProject(file: Blob): Promise<Project> {
     style: meta.style,
     output: meta.output,
     trim: meta.trim,
+    cuts: meta.cuts,
     music,
     recording: { ...meta.recording, blob: videoBlob, audioBlob },
   } as Project);

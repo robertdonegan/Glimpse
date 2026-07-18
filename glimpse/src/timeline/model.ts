@@ -105,6 +105,12 @@ export interface StyleSettings {
   pose: { rotX: number; rotY: number; rotZ: number };
   /** Depth-of-field bokeh driven by real scene depth (3D pose). */
   dof: { enabled: boolean; strength: number };
+  /**
+   * Redaction: blurred rectangles pinned to the recording (normalised x,y from
+   * top-left, w,h as fractions) — hides sensitive info, tilts/zooms with the
+   * content.
+   */
+  blur?: { x: number; y: number; w: number; h: number }[];
 }
 
 export interface BackgroundSettings {
@@ -168,6 +174,12 @@ export interface Project {
   output: { width: number; height: number; fps: number };
   /** In/out points (source ms) — playback and export use only this span. */
   trim: { start: Ms; end: Ms };
+  /**
+   * Removed source-time ranges (ms). Everything inside a cut is dropped from
+   * playback and export — the surrounding footage joins up. Sorted,
+   * non-overlapping (store invariant).
+   */
+  cuts?: { start: Ms; end: Ms }[];
 }
 
 export const DEFAULT_STYLE: StyleSettings = {
@@ -185,6 +197,7 @@ export const DEFAULT_STYLE: StyleSettings = {
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
+  blur: [],
 };
 
 export function createProject(recording: Recording): Project {
@@ -208,6 +221,7 @@ export function normalizeProject(p: Project): Project {
   style.cursor = { ...DEFAULT_STYLE.cursor, ...p.style?.cursor };
   style.dof = { ...DEFAULT_STYLE.dof, ...p.style?.dof };
   style.background = { ...DEFAULT_STYLE.background, ...p.style?.background };
+  style.blur = p.style?.blur ?? [];
   return {
     ...p,
     name: p.name || 'Untitled',
@@ -216,6 +230,7 @@ export function normalizeProject(p: Project): Project {
     overlays: p.overlays ?? [],
     recording: { ...p.recording, hasAudio: p.recording.hasAudio ?? false },
     trim: p.trim ?? { start: 0, end: p.recording.duration },
+    cuts: p.cuts ?? [],
   };
 }
 

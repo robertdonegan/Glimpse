@@ -196,13 +196,22 @@ export function sampleFrame(project: Project, t: number): FrameState {
   return { camera, cursor, pose, t };
 }
 
-/* ---------- Clip speed: source-time ↔ output-time mapping ----------
+/* ---------- Timeline: source-time ↔ output-time mapping ----------
  *
- * Zoom segments carry a playback speed. Source footage is never resampled;
- * instead the exporter walks output time and asks "which source instant is
- * on screen now?". Outside segments speed is 1. Segments are sorted and
- * non-overlapping (store invariant).
+ * The output timeline is a list of "pieces": the source ranges that survive
+ * trim − cuts, each split at zoom-speed boundaries so speed is constant per
+ * piece, laid out end-to-end. Cuts simply aren't represented, so playback and
+ * export skip them for free. Source footage is never resampled — the exporter
+ * walks output time and asks which source instant is on screen.
  */
+
+export interface TimelinePiece {
+  srcStart: number;
+  srcEnd: number;
+  speed: number;
+  outStart: number;
+  outEnd: number;
+}
 
 /** Playback speed at a given source time. */
 export function speedAt(zooms: ZoomSegment[], tSrc: number): number {
@@ -212,51 +221,81 @@ export function speedAt(zooms: ZoomSegment[], tSrc: number): number {
   return 1;
 }
 
-/** Total output duration once clip speeds are applied. */
-export function outputDuration(zooms: ZoomSegment[], srcDuration: number): number {
-  let out = 0;
-  let cur = 0;
-  for (const z of zooms) {
-    if (z.start >= srcDuration) break;
-    out += Math.max(0, z.start - cur);
-    out += (Math.min(z.end, srcDuration) - z.start) / (z.speed || 1);
-    cur = Math.min(z.end, srcDuration);
+/** True when a source instant falls inside a removed (cut) range. */
+export function isCut(cuts: Project['cuts'], tSrc: number): boolean {
+  if (!cuts) return false;
+  for (const c of cuts) if (tSrc >= c.start && tSrc < c.end) return true;
+  return false;
+}
+
+/** Build the output-timeline pieces for a project (trim − cuts, by speed). */
+export function buildTimeline(project: Project): TimelinePiece[] {
+  const { zooms, recording } = project;
+  const srcDuration = recording.duration;
+  const trim = project.trim ?? { start: 0, end: srcDuration };
+  const cuts = (project.cuts ?? []).slice().sort((a, b) => a.start - b.start);
+
+  // Kept source intervals = trim span minus every cut.
+  let kept = [{ start: Math.max(0, trim.start), end: Math.min(srcDuration, trim.end) }];
+  for (const c of cuts) {
+    const next: { start: number; end: number }[] = [];
+    for (const s of kept) {
+      if (c.end <= s.start || c.start >= s.end) {
+        next.push(s);
+        continue;
+      }
+      if (c.start > s.start) next.push({ start: s.start, end: c.start });
+      if (c.end < s.end) next.push({ start: c.end, end: s.end });
+    }
+    kept = next;
   }
-  out += Math.max(0, srcDuration - cur);
-  return out;
+
+  // Split each kept interval at zoom boundaries so speed is constant per piece.
+  const pieces: TimelinePiece[] = [];
+  let out = 0;
+  for (const s of kept) {
+    if (s.end - s.start <= 1e-3) continue;
+    const marks = new Set<number>([s.start, s.end]);
+    for (const z of zooms) {
+      if (z.start > s.start && z.start < s.end) marks.add(z.start);
+      if (z.end > s.start && z.end < s.end) marks.add(z.end);
+    }
+    const sorted = [...marks].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      if (b - a <= 1e-3) continue;
+      const speed = speedAt(zooms, (a + b) / 2) || 1;
+      const outLen = (b - a) / speed;
+      pieces.push({ srcStart: a, srcEnd: b, speed, outStart: out, outEnd: out + outLen });
+      out += outLen;
+    }
+  }
+  return pieces;
+}
+
+/** Total output duration of a piece list. */
+export function outputDuration(pieces: TimelinePiece[]): number {
+  return pieces.length ? pieces[pieces.length - 1].outEnd : 0;
 }
 
 /** Map a source-time instant to its position on the output timeline. */
-export function sourceToOutput(zooms: ZoomSegment[], tSrc: number): number {
-  let out = 0;
-  let src = 0;
-  for (const z of zooms) {
-    if (tSrc <= z.start) break;
-    out += Math.max(0, z.start - src);
-    const segEnd = Math.min(z.end, tSrc);
-    out += (segEnd - z.start) / (z.speed || 1);
-    src = Math.max(src, segEnd);
-    if (tSrc <= z.end) return out;
+export function sourceToOutput(pieces: TimelinePiece[], tSrc: number): number {
+  if (!pieces.length) return 0;
+  if (tSrc <= pieces[0].srcStart) return 0;
+  for (const p of pieces) {
+    if (tSrc < p.srcStart) return p.outStart; // inside a cut → collapse
+    if (tSrc <= p.srcEnd) return p.outStart + (tSrc - p.srcStart) / p.speed;
   }
-  return out + Math.max(0, tSrc - src);
+  return pieces[pieces.length - 1].outEnd;
 }
 
 /** Map an output-time instant back to the source-time instant on screen. */
-export function outputToSource(zooms: ZoomSegment[], tOut: number, srcDuration: number): number {
-  let out = 0;
-  let src = 0;
-  for (const z of zooms) {
-    if (z.start >= srcDuration) break;
-    const gap = Math.max(0, z.start - src);
-    if (tOut <= out + gap) return src + (tOut - out);
-    out += gap;
-    src = z.start;
-
-    const segSrcLen = Math.min(z.end, srcDuration) - z.start;
-    const segOutLen = segSrcLen / (z.speed || 1);
-    if (tOut <= out + segOutLen) return src + (tOut - out) * (z.speed || 1);
-    out += segOutLen;
-    src = Math.min(z.end, srcDuration);
+export function outputToSource(pieces: TimelinePiece[], tOut: number): number {
+  if (!pieces.length) return 0;
+  if (tOut <= 0) return pieces[0].srcStart;
+  for (const p of pieces) {
+    if (tOut <= p.outEnd) return p.srcStart + (tOut - p.outStart) * p.speed;
   }
-  return Math.min(src + (tOut - out), srcDuration);
+  return pieces[pieces.length - 1].srcEnd;
 }
