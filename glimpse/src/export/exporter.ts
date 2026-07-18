@@ -14,7 +14,13 @@
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import type { Project } from '../timeline/model';
-import { sampleFrame, outputToSource, sourceToOutput } from '../timeline/sampler';
+import {
+  sampleFrame,
+  buildTimeline,
+  outputDuration,
+  outputToSource,
+  type TimelinePiece,
+} from '../timeline/sampler';
 import { GlimpseRenderer } from '../render/renderer';
 
 export interface ExportProgress {
@@ -95,43 +101,61 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
 }
 
 /**
- * Mix recorded audio and imported music into one 48 kHz stereo buffer
- * covering the trimmed span. OfflineAudioContext handles resampling, offsets
- * and gain in one deterministic pass.
+ * Schedule an audio buffer positioned at `partSrcOffsetMs` on the source
+ * timeline across the kept pieces — so cuts drop their audio and the rest
+ * joins up, matching the video. Speed is 1 here (audioExportable gate).
+ */
+function scheduleAcrossPieces(
+  ctx: OfflineAudioContext,
+  pieces: TimelinePiece[],
+  buffer: AudioBuffer,
+  partSrcOffsetMs: number,
+  gain: number,
+): void {
+  const bufEndSrc = partSrcOffsetMs + buffer.duration * 1000;
+  for (const p of pieces) {
+    const s = Math.max(p.srcStart, partSrcOffsetMs);
+    const e = Math.min(p.srcEnd, bufEndSrc);
+    if (e - s <= 1) continue;
+    const when = (p.outStart + (s - p.srcStart) / p.speed) / 1000;
+    const offset = (s - partSrcOffsetMs) / 1000;
+    const dur = (e - s) / p.speed / 1000;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(ctx.destination);
+    src.start(when, offset, dur);
+  }
+}
+
+/**
+ * Mix recorded audio and imported music into one 48 kHz stereo buffer laid
+ * out on the (trimmed, cut) output timeline. OfflineAudioContext handles
+ * resampling, offsets and gain in one deterministic pass.
  */
 async function renderMixedAudio(
   project: Project,
-  startSec: number,
+  pieces: TimelinePiece[],
   durSec: number,
 ): Promise<AudioBuffer | null> {
-  const parts: { buffer: AudioBuffer; when: number; gain: number }[] = [];
+  const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
+  let any = false;
   if (project.recording.hasAudio) {
     const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
-    if (b) parts.push({ buffer: b, when: -startSec, gain: 1 });
+    if (b) {
+      scheduleAcrossPieces(ctx, pieces, b, 0, 1);
+      any = true;
+    }
   }
   if (project.music) {
     const b = await decodeAudio(project.music.blob);
     if (b) {
-      parts.push({
-        buffer: b,
-        when: project.music.offset / 1000 - startSec,
-        gain: project.music.gain,
-      });
+      scheduleAcrossPieces(ctx, pieces, b, project.music.offset, project.music.gain);
+      any = true;
     }
   }
-  if (parts.length === 0) return null;
-
-  const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
-  for (const p of parts) {
-    const src = ctx.createBufferSource();
-    src.buffer = p.buffer;
-    const gain = ctx.createGain();
-    gain.gain.value = p.gain;
-    src.connect(gain).connect(ctx.destination);
-    if (p.when >= 0) src.start(p.when);
-    else src.start(0, -p.when); // clip the part that sits before the in-point
-  }
-  return ctx.startRendering();
+  return any ? ctx.startRendering() : null;
 }
 
 /** Encode a slice of an AudioBuffer as AAC chunks into the muxer. */
@@ -192,12 +216,10 @@ export async function exportProject(
   }
 
   const { width, height, fps } = project.output;
-  const srcDurationMs = project.recording.duration;
-  const trim = project.trim ?? { start: 0, end: srcDurationMs };
-  // Export walks the output timeline restricted to the trimmed span.
-  const outStartMs = sourceToOutput(project.zooms, trim.start);
-  const outEndMs = sourceToOutput(project.zooms, trim.end);
-  const outDurationSec = Math.max(0.001, (outEndMs - outStartMs) / 1000);
+  // The piece list already encodes trim − cuts − clip speeds; walking it from
+  // 0 renders exactly the kept footage, joined up.
+  const pieces = buildTimeline(project);
+  const outDurationSec = Math.max(0.001, outputDuration(pieces) / 1000);
   const totalFrames = Math.max(1, Math.floor(outDurationSec * fps));
 
   const canvas = document.createElement('canvas');
@@ -211,9 +233,7 @@ export async function exportProject(
   await renderer.whenReady();
 
   const withAudio = audioExportable(project);
-  const audio = withAudio
-    ? await renderMixedAudio(project, trim.start / 1000, outDurationSec)
-    : null;
+  const audio = withAudio ? await renderMixedAudio(project, pieces, outDurationSec) : null;
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -252,8 +272,8 @@ export async function exportProject(
   try {
     for (let i = 0; i < totalFrames; i++) {
       if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
-      const tOutMs = outStartMs + (i / fps) * 1000;
-      const tSrcMs = outputToSource(project.zooms, tOutMs, srcDurationMs);
+      const tOutMs = (i / fps) * 1000;
+      const tSrcMs = outputToSource(pieces, tOutMs);
       await seekTo(video, tSrcMs / 1000);
       renderer.render(sampleFrame(project, tSrcMs));
 
@@ -264,14 +284,19 @@ export async function exportProject(
       encoder.encode(frame, { keyFrame: i % (fps * 2) === 0 });
       frame.close();
 
-      // Keep the encoder queue bounded so memory stays flat.
+      // Keep the encoder queue bounded so memory stays flat. Wait on the
+      // encoder's own 'dequeue' event rather than a 4ms busy-poll — the spin
+      // pegged a core and ran the machine hot for no throughput gain.
       if (encoder.encodeQueueSize > 8) {
         await new Promise<void>((res) => {
-          const check = () => {
-            if (encoder.encodeQueueSize <= 4) res();
-            else setTimeout(check, 4);
+          const onDequeue = () => {
+            if (encoder.encodeQueueSize <= 4) {
+              encoder.removeEventListener('dequeue', onDequeue);
+              res();
+            }
           };
-          check();
+          encoder.addEventListener('dequeue', onDequeue);
+          onDequeue();
         });
       }
       onProgress({ frame: i + 1, totalFrames });
@@ -351,6 +376,13 @@ async function exportRealtimeFallback(
         return resolve();
       }
       const tMs = video.currentTime * 1000;
+      // Jump over cut ranges so the fallback skips them like the main path.
+      const cut = (project.cuts ?? []).find((c) => tMs >= c.start && tMs < c.end);
+      if (cut) {
+        video.currentTime = cut.end / 1000;
+        requestAnimationFrame(tick);
+        return;
+      }
       renderer.render(sampleFrame(project, tMs));
       onProgress({ frame: Math.floor(((tMs - trim.start) / 1000) * fps), totalFrames });
       requestAnimationFrame(tick);
@@ -358,10 +390,15 @@ async function exportRealtimeFallback(
     tick();
   });
 
-  return new Promise((resolve) => {
+  const aborted = signal?.aborted ?? false;
+  return new Promise((resolve, reject) => {
     rec.onstop = () => {
       renderer.dispose();
       URL.revokeObjectURL(video.src);
+      if (aborted) {
+        reject(new DOMException('Export cancelled', 'AbortError'));
+        return;
+      }
       resolve({ blob: new Blob(chunks, { type: 'video/webm' }), extension: 'webm' });
     };
     rec.stop();

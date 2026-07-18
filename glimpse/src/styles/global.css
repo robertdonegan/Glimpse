@@ -503,6 +503,49 @@ button {
   border-top-color: var(--record);
 }
 
+/* Cut-out region: hatched red, removed from playback + export. */
+.cut-block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(229, 72, 77, 0.28) 0 6px,
+    rgba(229, 72, 77, 0.12) 6px 12px
+  );
+  border-left: 1px solid var(--record);
+  border-right: 1px solid var(--record);
+  z-index: 3;
+}
+
+.cut-block.preview {
+  pointer-events: none;
+  z-index: 4;
+}
+
+.cut-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  border-radius: 50%;
+  background: var(--record);
+  color: #fff;
+  font-size: 12px;
+  display: grid;
+  place-items: center;
+}
+
+.cut-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 10px;
+  opacity: 0.7;
+}
+
 /* Trimmed-out footage reads as dimmed film. */
 .trim-shade {
   position: absolute;
@@ -744,6 +787,56 @@ button {
   font-size: 12.5px;
 }
 
+/* Preview-speed slider in the timeline transport. */
+.rate-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.rate-slider input[type='range'] {
+  width: 88px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+}
+
+.rate-slider input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.rate-slider input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
+}
+
+.rate-slider input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
+}
+
+.rate-slider span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 40px;
+  text-align: right;
+}
+
 /* ---------- Inspector ---------- */
 
 .inspector {
@@ -898,6 +991,25 @@ button {
   border-color: var(--amber);
   color: var(--amber);
   background: var(--amber-soft);
+}
+
+.gradient-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  flex: 1;
+}
+
+.gradient-swatch {
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  padding: 0;
+}
+
+.gradient-swatch:hover {
+  border-color: var(--amber);
 }
 
 .overlay-item {

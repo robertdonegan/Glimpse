@@ -26,6 +26,13 @@ export interface ClickEvent {
   button: number;
 }
 
+/** A keystroke (or chord) captured during recording, for the on-screen HUD. */
+export interface KeyEvent {
+  t: Ms;
+  /** Display label, modifiers composed in — e.g. "⌘⇧S", "↵", "Space". */
+  label: string;
+}
+
 /**
  * How the recording was made. Determines which effects are available.
  * - 'tab'    — we captured our own tab: full cursor data, synthetic cursor on.
@@ -43,6 +50,8 @@ export interface Recording {
   mode: CaptureMode;
   cursor: CursorSample[];
   clicks: ClickEvent[];
+  /** Keystrokes captured during recording (tab capture or native desktop). */
+  keys?: KeyEvent[];
   /** Whether the capture stream included an audio track. */
   hasAudio: boolean;
   /**
@@ -105,6 +114,14 @@ export interface StyleSettings {
   pose: { rotX: number; rotY: number; rotZ: number };
   /** Depth-of-field bokeh driven by real scene depth (3D pose). */
   dof: { enabled: boolean; strength: number };
+  /** On-screen keystroke HUD (needs captured key telemetry). */
+  keystrokes: { enabled: boolean };
+  /**
+   * Redaction: blurred rectangles pinned to the recording (normalised x,y from
+   * top-left, w,h as fractions) — hides sensitive info, tilts/zooms with the
+   * content.
+   */
+  blur?: { x: number; y: number; w: number; h: number }[];
 }
 
 export interface BackgroundSettings {
@@ -168,6 +185,12 @@ export interface Project {
   output: { width: number; height: number; fps: number };
   /** In/out points (source ms) — playback and export use only this span. */
   trim: { start: Ms; end: Ms };
+  /**
+   * Removed source-time ranges (ms). Everything inside a cut is dropped from
+   * playback and export — the surrounding footage joins up. Sorted,
+   * non-overlapping (store invariant).
+   */
+  cuts?: { start: Ms; end: Ms }[];
 }
 
 export const DEFAULT_STYLE: StyleSettings = {
@@ -185,6 +208,8 @@ export const DEFAULT_STYLE: StyleSettings = {
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
+  keystrokes: { enabled: false },
+  blur: [],
 };
 
 export function createProject(recording: Recording): Project {
@@ -208,14 +233,21 @@ export function normalizeProject(p: Project): Project {
   style.cursor = { ...DEFAULT_STYLE.cursor, ...p.style?.cursor };
   style.dof = { ...DEFAULT_STYLE.dof, ...p.style?.dof };
   style.background = { ...DEFAULT_STYLE.background, ...p.style?.background };
+  style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
+  style.blur = p.style?.blur ?? [];
   return {
     ...p,
     name: p.name || 'Untitled',
     style,
     zooms: (p.zooms ?? []).map((z) => ({ ...z, speed: z.speed ?? 1 })),
     overlays: p.overlays ?? [],
-    recording: { ...p.recording, hasAudio: p.recording.hasAudio ?? false },
+    recording: {
+      ...p.recording,
+      hasAudio: p.recording.hasAudio ?? false,
+      keys: p.recording.keys ?? [],
+    },
     trim: p.trim ?? { start: 0, end: p.recording.duration },
+    cuts: p.cuts ?? [],
   };
 }
 

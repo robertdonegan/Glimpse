@@ -9,11 +9,40 @@
  * global mouse hook and nothing else has to change.
  */
 
-import type { ClickEvent, CursorSample } from '../timeline/model';
+import type { ClickEvent, CursorSample, KeyEvent } from '../timeline/model';
 
 export interface PointerLog {
   cursor: CursorSample[];
   clicks: ClickEvent[];
+  keys: KeyEvent[];
+}
+
+const KEY_MAP: Record<string, string> = {
+  ' ': 'Space',
+  Enter: '↵',
+  Backspace: '⌫',
+  Delete: '⌦',
+  Escape: 'Esc',
+  Tab: '⇥',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+};
+
+/** Compose a display label for a keydown, folding modifiers into the chord. */
+function keyLabel(e: KeyboardEvent): string | null {
+  if (e.key === 'Meta' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift') {
+    return null; // lone modifier press — nothing to show yet
+  }
+  const mods: string[] = [];
+  if (e.metaKey) mods.push('⌘');
+  if (e.ctrlKey) mods.push('⌃');
+  if (e.altKey) mods.push('⌥');
+  // Shift is implied by a capital letter/symbol; only show it for chords.
+  if (e.shiftKey && (e.key.length > 1 || mods.length > 0)) mods.push('⇧');
+  const k = KEY_MAP[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  return mods.join('') + k;
 }
 
 const INTERACTIVE_SELECTOR =
@@ -35,6 +64,7 @@ function isInteractive(target: EventTarget | null): boolean {
 export class PointerTracker {
   private cursor: CursorSample[] = [];
   private clicks: ClickEvent[] = [];
+  private keys: KeyEvent[] = [];
   private t0 = 0;
   private lastSampleT = -Infinity;
   private running = false;
@@ -63,6 +93,12 @@ export class PointerTracker {
       y: e.clientY / window.innerHeight,
       button: e.button,
     });
+  };
+
+  private onKeyDown = (e: KeyboardEvent) => {
+    if (!this.running) return;
+    const label = keyLabel(e);
+    if (label) this.keys.push({ t: performance.now() - this.t0, label });
   };
 
   /**
@@ -101,10 +137,12 @@ export class PointerTracker {
     this.t0 = startTime;
     this.cursor = [];
     this.clicks = [];
+    this.keys = [];
     this.lastSampleT = -Infinity;
     this.running = true;
     window.addEventListener('pointermove', this.onMove, { capture: true, passive: true });
     window.addEventListener('pointerdown', this.onDown, { capture: true, passive: true });
+    window.addEventListener('keydown', this.onKeyDown, { capture: true });
     window.addEventListener('message', this.onMessage);
   }
 
@@ -112,7 +150,8 @@ export class PointerTracker {
     this.running = false;
     window.removeEventListener('pointermove', this.onMove, { capture: true });
     window.removeEventListener('pointerdown', this.onDown, { capture: true });
+    window.removeEventListener('keydown', this.onKeyDown, { capture: true });
     window.removeEventListener('message', this.onMessage);
-    return { cursor: this.cursor, clicks: this.clicks };
+    return { cursor: this.cursor, clicks: this.clicks, keys: this.keys };
   }
 }

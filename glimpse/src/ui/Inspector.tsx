@@ -90,6 +90,18 @@ const POSE_PRESETS: Record<string, Pose> = {
   Showcase: { rotX: 16, rotY: 26, rotZ: -4 },
 };
 
+/** Curated 4-corner gradients (A=TL, B=TR, C=BL, D=BR). */
+const GRADIENT_PRESETS: { name: string; a: string; b: string; c: string; d: string }[] = [
+  { name: 'Dusk', a: '#1b2a4a', b: '#0b3b39', c: '#14243f', d: '#123f3c' },
+  { name: 'Sunset', a: '#ff8a5c', b: '#ffb26b', c: '#d16ba5', d: '#86a8e7' },
+  { name: 'Ocean', a: '#1a2980', b: '#26d0ce', c: '#0f2027', d: '#2c5364' },
+  { name: 'Grape', a: '#654ea3', b: '#eaafc8', c: '#42275a', d: '#734b6d' },
+  { name: 'Ember', a: '#ff512f', b: '#f09819', c: '#870000', d: '#2a0d05' },
+  { name: 'Forest', a: '#134e5e', b: '#71b280', c: '#0f3443', d: '#34e89e' },
+  { name: 'Slate', a: '#2c2f34', b: '#41454b', c: '#17191c', d: '#33373d' },
+  { name: 'Bloom', a: '#ee9ca7', b: '#ffdde1', c: '#b06ab3', d: '#4568dc' },
+];
+
 const POSE_STORE_KEY = 'glimpse.poseTemplates';
 
 function loadPoseTemplates(): Record<string, Pose> {
@@ -113,6 +125,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const runExport = useGlimpse((s) => s.runExport);
+  const cancelExport = useGlimpse((s) => s.cancelExport);
   const exportPng = useGlimpse((s) => s.exportPng);
   const exporting = useGlimpse((s) => s.exporting);
   const progress = useGlimpse((s) => s.exportProgress);
@@ -159,6 +172,16 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   };
 
   const audioDropped = recording.hasAudio && !audioExportable(project);
+
+  const blurRegions = style.blur ?? [];
+  const setBlur = (
+    i: number,
+    patch: Partial<{ x: number; y: number; w: number; h: number }>,
+  ) =>
+    patchStyle(
+      'blur',
+      blurRegions.map((r, j) => (j === i ? { ...r, ...patch } : r)),
+    );
 
   return (
     <aside className="inspector">
@@ -288,6 +311,32 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             <option value="solid">Solid</option>
           </select>
         </div>
+        <div className="row" style={{ alignItems: 'flex-start' }}>
+          <label>Presets</label>
+          <div className="gradient-presets">
+            {GRADIENT_PRESETS.map((g) => (
+              <button
+                key={g.name}
+                className="gradient-swatch"
+                title={g.name}
+                aria-label={`${g.name} gradient`}
+                style={{
+                  background: `linear-gradient(135deg, ${g.a}, ${g.b} 40%, ${g.c} 70%, ${g.d})`,
+                }}
+                onClick={() =>
+                  patchStyle('background', {
+                    ...style.background,
+                    kind: 'corners',
+                    colorA: g.a,
+                    colorB: g.b,
+                    colorC: g.c,
+                    colorD: g.d,
+                  })
+                }
+              />
+            ))}
+          </div>
+        </div>
         <div className="row">
           <label>{style.background.kind === 'corners' ? 'Top' : 'Colours'}</label>
           <input
@@ -400,6 +449,91 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             </p>
           </>
         )}
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Keyboard overlay</label>
+          <input
+            type="checkbox"
+            checked={style.keystrokes.enabled}
+            onChange={(e) => patchStyle('keystrokes', { enabled: e.target.checked })}
+          />
+        </div>
+        {style.keystrokes.enabled && !(recording.keys && recording.keys.length > 0) && (
+          <p className="hint">
+            No keystrokes captured in this recording. Native desktop capture and
+            tab recordings log keys; other captures don't.
+          </p>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Redact (blur)</label>
+          <button
+            className="chip"
+            onClick={() =>
+              patchStyle('blur', [...blurRegions, { x: 0.4, y: 0.4, w: 0.22, h: 0.1 }])
+            }
+            title="Add a blurred rectangle to hide sensitive info; it tilts/zooms with the recording"
+          >
+            Add region
+          </button>
+        </div>
+        {blurRegions.map((r, i) => (
+          <div key={i} className="overlay-item">
+            <div className="row" style={{ marginTop: 10 }}>
+              <label>Region {i + 1}</label>
+              <button
+                className="chip"
+                onClick={() =>
+                  patchStyle(
+                    'blur',
+                    blurRegions.filter((_, j) => j !== i),
+                  )
+                }
+              >
+                ×
+              </button>
+            </div>
+            <SliderRow
+              label="X"
+              value={r.x}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => setBlur(i, { x: v })}
+            />
+            <SliderRow
+              label="Y"
+              value={r.y}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => setBlur(i, { y: v })}
+            />
+            <SliderRow
+              label="Width"
+              value={r.w}
+              min={0.02}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => setBlur(i, { w: v })}
+            />
+            <SliderRow
+              label="Height"
+              value={r.h}
+              min={0.02}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => setBlur(i, { h: v })}
+            />
+          </div>
+        ))}
       </div>
 
       <div className="section">
@@ -740,6 +874,15 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             Audio is skipped when clip speeds differ from 1× — reset speeds to keep
             the soundtrack.
           </p>
+        )}
+        {exporting && (
+          <button
+            className="btn"
+            onClick={cancelExport}
+            style={{ width: '100%', marginTop: 8 }}
+          >
+            Cancel render
+          </button>
         )}
         {exporting && progress && (
           <>

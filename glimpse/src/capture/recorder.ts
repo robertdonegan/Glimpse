@@ -113,7 +113,7 @@ export async function beginRecording(opts: {
     return Promise.all([audioDone, videoDone]).then(() => {
       restoreCursor?.();
       const duration = performance.now() - startTime;
-      const log = ownTab ? tracker.stop() : { cursor: [], clicks: [] };
+      const log = ownTab ? tracker.stop() : { cursor: [], clicks: [], keys: [] };
       session.stream.getTracks().forEach((t) => t.stop());
       return {
         blob: new Blob(chunks, { type: mimeType || 'video/webm' }),
@@ -124,6 +124,7 @@ export async function beginRecording(opts: {
         mode: session.mode,
         cursor: log.cursor,
         clicks: log.clicks,
+        keys: log.keys,
         hasAudio,
         audioBlob: hasAudio
           ? new Blob(audioChunks, { type: 'audio/webm' })

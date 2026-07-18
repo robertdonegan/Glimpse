@@ -53,7 +53,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
       `${project.output.width} / ${project.output.height}`,
     );
 
-    const renderer = new GlimpseRenderer(canvas, project);
+    // Preview never reads the buffer back, so skip preserveDrawingBuffer —
+    // avoids driver tiling seams on some GPUs.
+    const renderer = new GlimpseRenderer(canvas, project, { preserveDrawingBuffer: false });
     rendererRef.current = renderer;
 
     let disposed = false;
@@ -74,6 +76,13 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         const current = st.project ?? project;
         const tMs = st.playing ? video.currentTime * 1000 : st.playhead;
         if (st.playing) {
+          // Jump over cut ranges so playback only shows kept footage.
+          const cut = (current.cuts ?? []).find((c) => tMs >= c.start && tMs < c.end);
+          if (cut) {
+            video.currentTime = cut.end / 1000;
+            raf = requestAnimationFrame(loop);
+            return;
+          }
           st.setPlayhead(tMs);
           // Clip speeds drive the preview's playback rate live (so a 0.5×
           // slow pass previews exactly as it exports), scaled by the

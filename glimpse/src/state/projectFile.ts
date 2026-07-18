@@ -11,6 +11,7 @@
 
 import type { Project, Recording } from '../timeline/model';
 import { normalizeProject } from '../timeline/model';
+import { isTauri } from '../capture/nativeCapture';
 
 const MAGIC = 0x474c4d50; // "GLMP"
 const VERSION = 3;
@@ -23,6 +24,7 @@ interface ProjectMeta {
   style: Project['style'];
   output: Project['output'];
   trim?: Project['trim'];
+  cuts?: Project['cuts'];
   recording: Omit<Recording, 'blob' | 'audioBlob'>;
   /** v2+: byte length of the video segment (audio follows it). */
   videoSize?: number;
@@ -42,6 +44,7 @@ export function serializeProject(p: Project): Blob {
     style: p.style,
     output: p.output,
     trim: p.trim,
+    cuts: p.cuts,
     recording: recMeta,
     videoSize: blob.size,
     audioSize: audioBlob?.size ?? 0,
@@ -95,6 +98,7 @@ export async function deserializeProject(file: Blob): Promise<Project> {
     style: meta.style,
     output: meta.output,
     trim: meta.trim,
+    cuts: meta.cuts,
     music,
     recording: { ...meta.recording, blob: videoBlob, audioBlob },
   } as Project);
@@ -102,7 +106,12 @@ export async function deserializeProject(file: Blob): Promise<Project> {
 
 /* ---------- File System Access (with download fallback) ---------- */
 
-type SaveHandle = FileSystemFileHandle;
+/**
+ * A saved-file reference: a File System Access handle (browser) or an absolute
+ * path string (Tauri desktop). "Save" reuses it; "Save as" forces a picker.
+ */
+export type ProjectHandle = FileSystemFileHandle | string;
+type SaveHandle = ProjectHandle;
 
 const PICKER_TYPES = [
   {
@@ -123,8 +132,27 @@ export async function saveProjectFile(
 ): Promise<SaveHandle | null> {
   const blob = serializeProject(project);
 
+  // Desktop app: WKWebView has no showSaveFilePicker, so use the native save
+  // dialog + fs write. "Save" reuses the known path (no prompt, one file);
+  // only "Save as" / first save opens the dialog.
+  if (isTauri()) {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    let path = typeof existing === 'string' ? existing : null;
+    if (!path || forcePicker) {
+      path = await save({
+        defaultPath: `${project.name || 'glimpse-project'}.glimpse`,
+        filters: [{ name: 'Glimpse project', extensions: ['glimpse'] }],
+      });
+      if (!path) throw new DOMException('Save cancelled', 'AbortError');
+    }
+    await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+    return path;
+  }
+
   if (fsAccessSupported()) {
-    let handle = existing;
+    // Tauri returned above, so any handle here is a real FS Access handle.
+    let handle = typeof existing === 'string' ? null : existing;
     if (!handle || forcePicker) {
       handle = await window.showSaveFilePicker({
         suggestedName: `${project.name || 'glimpse-project'}.glimpse`,
@@ -152,6 +180,19 @@ export async function openProjectFile(
   file?: File,
 ): Promise<{ project: Project; handle: SaveHandle | null }> {
   if (file) return { project: await deserializeProject(file), handle: null };
+
+  if (isTauri()) {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+    const path = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Glimpse project', extensions: ['glimpse'] }],
+    });
+    if (typeof path !== 'string') throw new DOMException('No file chosen', 'AbortError');
+    const bytes = await readFile(path);
+    return { project: await deserializeProject(new Blob([bytes])), handle: path };
+  }
 
   if ('showOpenFilePicker' in window) {
     const [handle] = await window.showOpenFilePicker({ types: PICKER_TYPES });
