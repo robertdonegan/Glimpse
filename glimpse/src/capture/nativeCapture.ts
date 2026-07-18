@@ -25,6 +25,7 @@ interface NativeCaptureResult {
   duration_ms: number;
   cursor: { t: number; x: number; y: number; hand: boolean }[];
   clicks: { t: number; x: number; y: number; button: number }[];
+  keys: { t: number; label: string }[];
   screen_w: number;
   screen_h: number;
   has_audio: boolean;
@@ -52,6 +53,7 @@ export async function beginNativeRecording(opts: {
       mode: 'screen',
       cursor: res.cursor.map((s) => ({ t: s.t, x: s.x / w, y: s.y / h, hand: s.hand })),
       clicks: res.clicks.map((c) => ({ t: c.t, x: c.x / w, y: c.y / h, button: c.button })),
+      keys: (res.keys ?? []).map((k) => ({ t: k.t, label: k.label })),
       hasAudio: res.has_audio,
     };
   };

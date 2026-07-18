@@ -17,7 +17,7 @@ import {
   loadRecordingVideo,
   type ExportProgress,
 } from '../export/exporter';
-import { saveProjectFile, openProjectFile } from './projectFile';
+import { saveProjectFile, openProjectFile, type ProjectHandle } from './projectFile';
 
 export type Screen = 'welcome' | 'recording' | 'editor' | 'frame';
 
@@ -25,8 +25,9 @@ interface GlimpseState {
   screen: Screen;
   project: Project | null;
   active: ActiveRecording | null;
-  /** File handle for quick "Save" once the project has a home on disk. */
-  fileHandle: FileSystemFileHandle | null;
+  /** File handle (browser) or path (desktop) for quick "Save" once the project
+   * has a home on disk. */
+  fileHandle: ProjectHandle | null;
 
   // Playback
   playhead: number; // ms

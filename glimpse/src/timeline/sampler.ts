@@ -31,9 +31,14 @@ export interface FrameState {
   cursor: CursorState;
   /** 3D pose for this frame, degrees — base style blended with zoom tilt. */
   pose: { rotX: number; rotY: number; rotZ: number };
+  /** Active keystroke for the HUD: label + fade (0 = just pressed, 1 = gone). */
+  key: { label: string; age: number } | null;
   /** Source time of this frame (drives time-windowed overlays). */
   t: number;
 }
+
+/** How long a keystroke stays on the HUD before it has fully faded. */
+const KEY_WINDOW_MS = 1400;
 
 const IDLE_CAMERA: CameraState = { scale: 1, focusX: 0.5, focusY: 0.5 };
 
@@ -193,7 +198,19 @@ export function sampleFrame(project: Project, t: number): FrameState {
     }
   }
 
-  return { camera, cursor, pose, t };
+  // Keystroke HUD: the most recent key at/before t, still within its window.
+  let key: FrameState['key'] = null;
+  if (style.keystrokes.enabled && recording.keys && recording.keys.length) {
+    for (let i = recording.keys.length - 1; i >= 0; i--) {
+      const dt = t - recording.keys[i].t;
+      if (dt < 0) continue;
+      if (dt > KEY_WINDOW_MS) break;
+      key = { label: recording.keys[i].label, age: dt / KEY_WINDOW_MS };
+      break;
+    }
+  }
+
+  return { camera, cursor, pose, key, t };
 }
 
 /* ---------- Timeline: source-time ↔ output-time mapping ----------

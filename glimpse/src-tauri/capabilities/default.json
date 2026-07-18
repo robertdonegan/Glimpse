@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Main window capability",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    { "identifier": "fs:allow-write-file", "allow": [{ "path": "**" }] },
+    { "identifier": "fs:allow-read-file", "allow": [{ "path": "**" }] }
+  ]
 }

@@ -36,12 +36,20 @@ pub struct Click {
     pub button: i32,
 }
 
+#[derive(Serialize, Clone)]
+pub struct KeyEvent {
+    pub t: f64,
+    /// Display label with modifiers folded in, e.g. "⌘⇧S", "↵".
+    pub label: String,
+}
+
 #[derive(Serialize)]
 pub struct CaptureResult {
     pub path: String,
     pub duration_ms: f64,
     pub cursor: Vec<Sample>,
     pub clicks: Vec<Click>,
+    pub keys: Vec<KeyEvent>,
     pub screen_w: f64,
     pub screen_h: f64,
     pub has_audio: bool,
@@ -62,6 +70,9 @@ extern "C" {
     fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
     /// state_id 0 = combined session state; button 0 = left, 1 = right, 2 = center.
     fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
+    /// Query-only (like button state, no Input Monitoring permission): is the
+    /// given virtual keycode currently down?
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
@@ -88,6 +99,30 @@ fn mouse_location() -> Option<(f64, f64)> {
 fn button_state(cg_button: u32) -> bool {
     unsafe { CGEventSourceButtonState(0, cg_button) }
 }
+
+fn key_state(code: u16) -> bool {
+    unsafe { CGEventSourceKeyState(0, code) }
+}
+
+/* ---------- Keyboard: virtual keycodes → labels (US ANSI) ---------- */
+
+const MOD_CMD: [u16; 2] = [54, 55];
+const MOD_SHIFT: [u16; 2] = [56, 60];
+const MOD_OPT: [u16; 2] = [58, 61];
+const MOD_CTRL: [u16; 2] = [59, 62];
+
+const KEYS: [(u16, &str); 57] = [
+    (0, "A"), (11, "B"), (8, "C"), (2, "D"), (14, "E"), (3, "F"), (5, "G"), (4, "H"),
+    (34, "I"), (38, "J"), (40, "K"), (37, "L"), (46, "M"), (45, "N"), (31, "O"), (35, "P"),
+    (12, "Q"), (15, "R"), (1, "S"), (17, "T"), (32, "U"), (9, "V"), (13, "W"), (7, "X"),
+    (16, "Y"), (6, "Z"),
+    (29, "0"), (18, "1"), (19, "2"), (20, "3"), (21, "4"), (23, "5"), (22, "6"), (26, "7"),
+    (28, "8"), (25, "9"),
+    (49, "Space"), (36, "↵"), (48, "⇥"), (53, "Esc"), (51, "⌫"), (117, "⌦"),
+    (123, "←"), (124, "→"), (125, "↓"), (126, "↑"),
+    (27, "-"), (24, "="), (33, "["), (30, "]"), (43, ","), (47, "."), (44, "/"),
+    (41, ";"), (39, "'"), (50, "`"), (42, "\\"),
+];
 
 fn main_display_size() -> (f64, f64) {
     unsafe {
@@ -262,6 +297,7 @@ impl Drop for AxProbe {
 struct TelemetryLog {
     cursor: Vec<Sample>,
     clicks: Vec<Click>,
+    keys: Vec<KeyEvent>,
 }
 
 /// (CG button id, JS MouseEvent.button value)
@@ -277,6 +313,7 @@ fn spawn_poller(
         let probe = if ax_enabled { Some(AxProbe::new()) } else { None };
         let mut last_pos = (f64::NAN, f64::NAN);
         let mut was_down = [false; 3];
+        let mut key_was = vec![false; KEYS.len()];
         let mut hand = false;
         let mut tick: u32 = 0;
         while !stop.load(Ordering::Relaxed) {
@@ -307,6 +344,33 @@ fn spawn_poller(
                         });
                     }
                     was_down[i] = down;
+                }
+
+                // Keystrokes (query-only, no Input Monitoring permission).
+                let cmd = MOD_CMD.iter().any(|&c| key_state(c));
+                let ctrl = MOD_CTRL.iter().any(|&c| key_state(c));
+                let opt = MOD_OPT.iter().any(|&c| key_state(c));
+                let shift = MOD_SHIFT.iter().any(|&c| key_state(c));
+                for (i, (code, name)) in KEYS.iter().enumerate() {
+                    let down = key_state(*code);
+                    if down && !key_was[i] {
+                        let mut label = String::new();
+                        if cmd {
+                            label.push('⌘');
+                        }
+                        if ctrl {
+                            label.push('⌃');
+                        }
+                        if opt {
+                            label.push('⌥');
+                        }
+                        if shift && (cmd || ctrl || opt || name.chars().count() > 1) {
+                            label.push('⇧');
+                        }
+                        label.push_str(name);
+                        l.keys.push(KeyEvent { t, label });
+                    }
+                    key_was[i] = down;
                 }
             }
             tick = tick.wrapping_add(1);
@@ -456,6 +520,7 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         .map(|mut l| TelemetryLog {
             cursor: std::mem::take(&mut l.cursor),
             clicks: std::mem::take(&mut l.clicks),
+            keys: std::mem::take(&mut l.keys),
         })
         .unwrap_or_default();
 
@@ -490,6 +555,14 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
             c
         })
         .collect();
+    let keys: Vec<KeyEvent> = telemetry
+        .keys
+        .into_iter()
+        .map(|mut k| {
+            k.t = (k.t - shift_ms).max(0.0);
+            k
+        })
+        .collect();
 
     let duration_ms = (active.start.elapsed().as_secs_f64() * 1000.0 - shift_ms).max(1.0);
     let (screen_w, screen_h) = main_display_size();
@@ -507,6 +580,7 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         duration_ms,
         cursor,
         clicks,
+        keys,
         screen_w,
         screen_h,
         has_audio: active.has_audio,

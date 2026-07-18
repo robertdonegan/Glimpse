@@ -450,6 +450,21 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           </>
         )}
         <div className="row" style={{ marginTop: 12 }}>
+          <label>Keyboard overlay</label>
+          <input
+            type="checkbox"
+            checked={style.keystrokes.enabled}
+            onChange={(e) => patchStyle('keystrokes', { enabled: e.target.checked })}
+          />
+        </div>
+        {style.keystrokes.enabled && !(recording.keys && recording.keys.length > 0) && (
+          <p className="hint">
+            No keystrokes captured in this recording. Native desktop capture and
+            tab recordings log keys; other captures don't.
+          </p>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
           <label>Redact (blur)</label>
           <button
             className="chip"

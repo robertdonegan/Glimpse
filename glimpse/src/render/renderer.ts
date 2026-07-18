@@ -274,6 +274,40 @@ function makeRingTexture(): THREE.Texture {
   return tex;
 }
 
+/** Render a keystroke label as a rounded keycap texture. */
+function makeKeycapTexture(label: string): { tex: THREE.Texture; aspect: number } {
+  const fontSize = 64;
+  const padX = 30;
+  const padY = 20;
+  const font = `600 ${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
+  const meas = document.createElement('canvas').getContext('2d')!;
+  meas.font = font;
+  const tw = Math.ceil(meas.measureText(label).width);
+  const w = tw + padX * 2;
+  const h = fontSize + padY * 2;
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext('2d')!;
+  const r = h * 0.24;
+  ctx.beginPath();
+  ctx.roundRect(2, 2, w - 4, h - 4, r);
+  ctx.fillStyle = 'rgba(18,20,26,0.82)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, w / 2, h / 2 + 2);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return { tex, aspect: w / h };
+}
+
 /** Rasterise an image/SVG data-URL into a texture (SVGs get a crisp 1024px). */
 function loadOverlayTexture(
   src: string,
@@ -338,6 +372,12 @@ export class GlimpseRenderer {
 
   /** Redaction blur quads, one per style.blur region. */
   private blurMeshes: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>[] = [];
+
+  /** Keystroke HUD keycap (screen space, bottom-centre). */
+  private keyMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
+  private keyTextures = new Map<string, { tex: THREE.Texture; aspect: number }>();
+  private activeKeyLabel = '';
+  private keyAspect = 3;
 
   /** In-flight async texture decodes — awaited by whenReady() before export. */
   private pending: Promise<unknown>[] = [];
@@ -444,6 +484,19 @@ export class GlimpseRenderer {
     // hudGroup sits at scene root — never inherits pose tilt or zoom scale, so
     // flat graphics stay pinned to the output frame. Added last = drawn on top.
     this.scene.add(this.hudGroup);
+
+    this.keyMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        opacity: 0,
+      }),
+    );
+    this.keyMesh.renderOrder = 25;
+    this.keyMesh.visible = false;
+    this.hudGroup.add(this.keyMesh);
 
     this.setCursorTexture('default');
     this.applyStyle(project.style);
@@ -769,6 +822,29 @@ export class GlimpseRenderer {
       }
     }
 
+    // Keystroke HUD: keycap pinned bottom-centre, holds then fades.
+    if (frame.key && this.style.keystrokes.enabled) {
+      if (frame.key.label !== this.activeKeyLabel) {
+        this.activeKeyLabel = frame.key.label;
+        let entry = this.keyTextures.get(frame.key.label);
+        if (!entry) {
+          entry = makeKeycapTexture(frame.key.label);
+          this.keyTextures.set(frame.key.label, entry);
+        }
+        this.keyMesh.material.map = entry.tex;
+        this.keyMesh.material.needsUpdate = true;
+        this.keyAspect = entry.aspect;
+      }
+      const h = this.viewH * 0.085;
+      this.keyMesh.scale.set(h * this.keyAspect, h, 1);
+      this.keyMesh.position.set(0, -this.viewH * 0.5 + h * 1.1, 0);
+      const a = frame.key.age < 0.6 ? 1 : Math.max(0, 1 - (frame.key.age - 0.6) / 0.4);
+      this.keyMesh.material.opacity = a;
+      this.keyMesh.visible = true;
+    } else {
+      this.keyMesh.visible = false;
+    }
+
     this.videoTexture && (this.videoTexture.needsUpdate = true);
     this.renderer.render(this.scene, this.camera);
   }
@@ -778,6 +854,7 @@ export class GlimpseRenderer {
     this.backdropImage?.dispose();
     for (const m of this.blurMeshes) m.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
+    this.keyTextures.forEach((e) => e.tex.dispose());
     for (const node of this.overlays.values()) {
       (node.mesh.material.map as THREE.Texture | null)?.dispose();
       node.mesh.material.dispose();
