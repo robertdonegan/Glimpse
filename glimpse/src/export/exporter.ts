@@ -13,6 +13,7 @@
  */
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import type { Project } from '../timeline/model';
 import {
   sampleFrame,
@@ -30,7 +31,7 @@ export interface ExportProgress {
 
 export interface ExportResult {
   blob: Blob;
-  extension: 'mp4' | 'webm' | 'png';
+  extension: 'mp4' | 'webm' | 'png' | 'gif';
 }
 
 export function webCodecsSupported(): boolean {
@@ -269,15 +270,48 @@ export async function exportProject(
   encoder.configure(config);
 
   const frameDurationUs = 1_000_000 / fps;
+  // Motion blur: render several sub-frames across a shutter window and average
+  // them with a 'lighter' composite (each at 1/N alpha). N× the seeks/renders.
+  const mb = project.style.motionBlur;
+  const mbSamples = mb?.enabled ? Math.max(2, Math.round(2 + (mb.amount ?? 0.5) * 6)) : 1;
+  const shutterMs = (1000 / fps) * 0.6;
+  let accum: HTMLCanvasElement | null = null;
+  let accumCtx: CanvasRenderingContext2D | null = null;
+  if (mbSamples > 1) {
+    accum = document.createElement('canvas');
+    accum.width = width;
+    accum.height = height;
+    accumCtx = accum.getContext('2d');
+  }
   try {
     for (let i = 0; i < totalFrames; i++) {
       if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
       const tOutMs = (i / fps) * 1000;
-      const tSrcMs = outputToSource(pieces, tOutMs);
-      await seekTo(video, tSrcMs / 1000);
-      renderer.render(sampleFrame(project, tSrcMs));
+      let frameSource: HTMLCanvasElement = canvas;
+      if (mbSamples === 1 || !accumCtx) {
+        const tSrcMs = outputToSource(pieces, tOutMs);
+        await seekTo(video, tSrcMs / 1000);
+        renderer.render(sampleFrame(project, tSrcMs));
+      } else {
+        accumCtx.globalCompositeOperation = 'source-over';
+        accumCtx.globalAlpha = 1;
+        accumCtx.fillStyle = '#000';
+        accumCtx.fillRect(0, 0, width, height);
+        accumCtx.globalCompositeOperation = 'lighter';
+        accumCtx.globalAlpha = 1 / mbSamples;
+        for (let m = 0; m < mbSamples; m++) {
+          const subOut = Math.max(0, tOutMs + ((m + 0.5) / mbSamples - 0.5) * shutterMs);
+          const tSrc = outputToSource(pieces, subOut);
+          await seekTo(video, tSrc / 1000);
+          renderer.render(sampleFrame(project, tSrc));
+          accumCtx.drawImage(canvas, 0, 0);
+        }
+        accumCtx.globalCompositeOperation = 'source-over';
+        accumCtx.globalAlpha = 1;
+        frameSource = accum!;
+      }
 
-      const frame = new VideoFrame(canvas, {
+      const frame = new VideoFrame(frameSource, {
         timestamp: i * frameDurationUs,
         duration: frameDurationUs,
       });
@@ -308,6 +342,65 @@ export async function exportProject(
     return { blob: new Blob([buffer], { type: 'video/mp4' }), extension: 'mp4' };
   } finally {
     encoder.state !== 'closed' && encoder.close();
+    renderer.dispose();
+    URL.revokeObjectURL(video.src);
+  }
+}
+
+/**
+ * Export an animated GIF. GIFs are palette-limited and heavy, so this renders
+ * at a reduced size and frame rate, quantising each frame to 256 colours.
+ * Honours trim + cuts (via the piece timeline); no audio.
+ */
+export async function exportGif(
+  project: Project,
+  onProgress: (p: ExportProgress) => void,
+  signal?: AbortSignal,
+): Promise<ExportResult> {
+  const GIF_FPS = 15;
+  const MAX_W = 800;
+  const aspect = project.output.width / project.output.height;
+  const width = Math.min(MAX_W, project.output.width);
+  const height = Math.max(2, Math.round(width / aspect));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const renderer = new GlimpseRenderer(canvas, project);
+  renderer.resize(width, height);
+  const video = await loadRecordingVideo(project.recording.blob);
+  renderer.attachVideo(video);
+  await renderer.whenReady();
+
+  const pieces = buildTimeline(project);
+  const durSec = Math.max(0.001, outputDuration(pieces) / 1000);
+  const totalFrames = Math.max(1, Math.floor(durSec * GIF_FPS));
+  const delay = Math.round(1000 / GIF_FPS);
+
+  const gif = GIFEncoder();
+  const read = document.createElement('canvas');
+  read.width = width;
+  read.height = height;
+  const rctx = read.getContext('2d', { willReadFrequently: true })!;
+
+  try {
+    for (let i = 0; i < totalFrames; i++) {
+      if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
+      const tSrc = outputToSource(pieces, (i / GIF_FPS) * 1000);
+      await seekTo(video, tSrc / 1000);
+      renderer.render(sampleFrame(project, tSrc));
+      rctx.drawImage(canvas, 0, 0);
+      const { data } = rctx.getImageData(0, 0, width, height);
+      const palette = quantize(data, 256);
+      const index = applyPalette(data, palette);
+      gif.writeFrame(index, width, height, { palette, delay });
+      onProgress({ frame: i + 1, totalFrames });
+      if (i % 8 === 0) await new Promise((r) => setTimeout(r)); // keep UI alive
+    }
+    gif.finish();
+    const bytes = new Uint8Array(gif.bytes()); // copy into a plain ArrayBuffer
+    return { blob: new Blob([bytes], { type: 'image/gif' }), extension: 'gif' };
+  } finally {
     renderer.dispose();
     URL.revokeObjectURL(video.src);
   }

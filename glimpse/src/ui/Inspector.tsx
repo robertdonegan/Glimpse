@@ -125,6 +125,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const runExport = useGlimpse((s) => s.runExport);
+  const runExportGif = useGlimpse((s) => s.runExportGif);
   const cancelExport = useGlimpse((s) => s.cancelExport);
   const exportPng = useGlimpse((s) => s.exportPng);
   const exporting = useGlimpse((s) => s.exporting);
@@ -449,6 +450,106 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             </p>
           </>
         )}
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Spotlight</label>
+          <input
+            type="checkbox"
+            checked={style.spotlight.enabled}
+            onChange={(e) =>
+              patchStyle('spotlight', { ...style.spotlight, enabled: e.target.checked })
+            }
+            title="Darken the frame except a pool of light — for dramatic emphasis"
+          />
+        </div>
+        {style.spotlight.enabled && (
+          <>
+            <div className="row">
+              <label>Follow cursor</label>
+              <input
+                type="checkbox"
+                checked={style.spotlight.follow}
+                disabled={!hasCursorData}
+                onChange={(e) =>
+                  patchStyle('spotlight', { ...style.spotlight, follow: e.target.checked })
+                }
+              />
+            </div>
+            <SliderRow
+              label="Radius"
+              value={style.spotlight.radius}
+              min={0.05}
+              max={0.6}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('spotlight', { ...style.spotlight, radius: v })}
+            />
+            <SliderRow
+              label="Darkness"
+              value={style.spotlight.strength}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('spotlight', { ...style.spotlight, strength: v })}
+            />
+            {!style.spotlight.follow && (
+              <>
+                <SliderRow
+                  label="Light X"
+                  value={style.spotlight.x}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  format={(v) => `${Math.round(v * 100)}%`}
+                  parse={(n) => n / 100}
+                  onChange={(v) => patchStyle('spotlight', { ...style.spotlight, x: v })}
+                />
+                <SliderRow
+                  label="Light Y"
+                  value={style.spotlight.y}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  format={(v) => `${Math.round(v * 100)}%`}
+                  parse={(n) => n / 100}
+                  onChange={(v) => patchStyle('spotlight', { ...style.spotlight, y: v })}
+                />
+              </>
+            )}
+          </>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Motion blur</label>
+          <input
+            type="checkbox"
+            checked={style.motionBlur.enabled}
+            onChange={(e) =>
+              patchStyle('motionBlur', { ...style.motionBlur, enabled: e.target.checked })
+            }
+          />
+        </div>
+        {style.motionBlur.enabled && (
+          <>
+            <SliderRow
+              label="Amount"
+              value={style.motionBlur.amount}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('motionBlur', { ...style.motionBlur, amount: v })}
+            />
+            <p className="hint">
+              Renders extra sub-frames per frame — smoother motion, but export
+              runs several times slower and hotter. Affects export only.
+            </p>
+          </>
+        )}
+
         <div className="row" style={{ marginTop: 12 }}>
           <label>Keyboard overlay</label>
           <input
@@ -859,6 +960,15 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           style={{ width: '100%' }}
         >
           {exporting ? 'Rendering…' : 'Export MP4'}
+        </button>
+        <button
+          className="btn"
+          onClick={() => void runExportGif()}
+          disabled={exporting}
+          style={{ width: '100%', marginTop: 8 }}
+          title="Animated GIF — reduced size & frame rate, honours trim + cuts"
+        >
+          Export GIF
         </button>
         <button
           className="btn"

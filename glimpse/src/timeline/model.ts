@@ -117,6 +117,26 @@ export interface StyleSettings {
   /** On-screen keystroke HUD (needs captured key telemetry). */
   keystrokes: { enabled: boolean };
   /**
+   * Spotlight / key light: darkens the frame except a soft pool that either
+   * follows the cursor or sits at a fixed point — for dramatic emphasis.
+   */
+  spotlight: {
+    enabled: boolean;
+    /** Track the recorded cursor instead of the fixed x/y. */
+    follow: boolean;
+    x: number;
+    y: number;
+    /** Pool radius as a fraction of the recording. */
+    radius: number;
+    /** How dark the surroundings go, 0–1. */
+    strength: number;
+  };
+  /**
+   * Export-time motion blur (multi-sample shutter). Off by default — it
+   * multiplies render time and heat.
+   */
+  motionBlur: { enabled: boolean; amount: number };
+  /**
    * Redaction: blurred rectangles pinned to the recording (normalised x,y from
    * top-left, w,h as fractions) — hides sensitive info, tilts/zooms with the
    * content.
@@ -209,6 +229,8 @@ export const DEFAULT_STYLE: StyleSettings = {
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
   keystrokes: { enabled: false },
+  spotlight: { enabled: false, follow: true, x: 0.5, y: 0.5, radius: 0.26, strength: 0.7 },
+  motionBlur: { enabled: false, amount: 0.5 },
   blur: [],
 };
 
@@ -234,6 +256,8 @@ export function normalizeProject(p: Project): Project {
   style.dof = { ...DEFAULT_STYLE.dof, ...p.style?.dof };
   style.background = { ...DEFAULT_STYLE.background, ...p.style?.background };
   style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
+  style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
+  style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
   style.blur = p.style?.blur ?? [];
   return {
     ...p,

@@ -13,6 +13,7 @@ import { beginRecording, type ActiveRecording } from '../capture/recorder';
 import { beginNativeRecording } from '../capture/nativeCapture';
 import {
   exportProject,
+  exportGif,
   exportStill,
   loadRecordingVideo,
   type ExportProgress,
@@ -90,7 +91,9 @@ interface GlimpseState {
   setPreviewRate: (rate: number) => void;
 
   runExport: () => Promise<void>;
-  /** Abort an in-progress MP4 export. */
+  /** Export the trimmed/cut timeline as an animated GIF. */
+  runExportGif: () => Promise<void>;
+  /** Abort an in-progress export. */
   cancelExport: () => void;
   exportPng: (scale?: number) => Promise<void>;
 }
@@ -495,6 +498,23 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.${result.extension}`);
     } catch (e) {
       // Cancellation is expected, not an error worth surfacing.
+      if ((e as DOMException)?.name !== 'AbortError') throw e;
+    } finally {
+      exportAbort = null;
+      set({ exporting: false, exportProgress: null });
+    }
+  },
+
+  runExportGif: async () => {
+    const p = get().project;
+    if (!p || get().exporting) return;
+    const controller = new AbortController();
+    exportAbort = controller;
+    set({ exporting: true, exportProgress: null, playing: false });
+    try {
+      const result = await exportGif(p, (exportProgress) => set({ exportProgress }), controller.signal);
+      downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.gif`);
+    } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') throw e;
     } finally {
       exportAbort = null;

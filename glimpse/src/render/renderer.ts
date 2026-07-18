@@ -161,6 +161,22 @@ const REGION_FRAG = /* glsl */ `
   }
 `;
 
+// Spotlight: darkens the plane except a soft radial pool at `center`.
+const SPOT_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform vec2 center;
+  uniform float radius;
+  uniform float strength;
+  uniform float aspect;
+  void main() {
+    vec2 d = vUv - center;
+    d.x *= aspect;
+    float dist = length(d);
+    float t = smoothstep(radius, radius * 1.9, dist);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, t * strength);
+  }
+`;
+
 function makeShadowTexture(): THREE.Texture {
   const s = 256;
   const cv = document.createElement('canvas');
@@ -373,6 +389,9 @@ export class GlimpseRenderer {
   /** Redaction blur quads, one per style.blur region. */
   private blurMeshes: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>[] = [];
 
+  /** Spotlight darkening quad over the recording. */
+  private spotMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+
   /** Keystroke HUD keycap (screen space, bottom-centre). */
   private keyMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
   private keyTextures = new Map<string, { tex: THREE.Texture; aspect: number }>();
@@ -478,7 +497,32 @@ export class GlimpseRenderer {
     );
     this.ringMesh.renderOrder = 9;
 
-    this.zoomGroup.add(this.shadowPlane, this.videoPlane, this.cursorMesh, this.ringMesh);
+    this.spotMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.ShaderMaterial({
+        vertexShader: REGION_VERT,
+        fragmentShader: SPOT_FRAG,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        uniforms: {
+          center: { value: new THREE.Vector2(0.5, 0.5) },
+          radius: { value: 0.26 },
+          strength: { value: 0.7 },
+          aspect: { value: 1 },
+        },
+      }),
+    );
+    this.spotMesh.renderOrder = 4; // above video/blur, below overlays + cursor
+    this.spotMesh.visible = false;
+
+    this.zoomGroup.add(
+      this.shadowPlane,
+      this.videoPlane,
+      this.spotMesh,
+      this.cursorMesh,
+      this.ringMesh,
+    );
     this.poseGroup.add(this.zoomGroup);
     this.scene.add(this.poseGroup);
     // hudGroup sits at scene root — never inherits pose tilt or zoom scale, so
@@ -769,6 +813,23 @@ export class GlimpseRenderer {
       u.uvSize.value.set(r.w, r.h);
     }
 
+    // Spotlight: darken everything but a soft pool at the cursor / fixed point.
+    const sp = this.style.spotlight;
+    if (sp?.enabled) {
+      this.spotMesh.visible = true;
+      this.spotMesh.scale.set(this.planeW, this.planeH, 1);
+      this.spotMesh.position.set(0, 0, 0.03);
+      const cx = sp.follow && cursor.visible ? cursor.x : sp.x;
+      const cy = sp.follow && cursor.visible ? cursor.y : sp.y;
+      const u = this.spotMesh.material.uniforms;
+      u.center.value.set(cx, 1 - cy);
+      u.radius.value = sp.radius;
+      u.strength.value = sp.strength;
+      u.aspect.value = this.planeW / this.planeH;
+    } else {
+      this.spotMesh.visible = false;
+    }
+
     // Overlays: visible inside their time window.
     for (const o of this.overlayList) {
       const node = this.overlays.get(o.id);
@@ -853,6 +914,7 @@ export class GlimpseRenderer {
     this.videoTexture?.dispose();
     this.backdropImage?.dispose();
     for (const m of this.blurMeshes) m.material.dispose();
+    this.spotMesh.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
     this.keyTextures.forEach((e) => e.tex.dispose());
     for (const node of this.overlays.values()) {
