@@ -206,6 +206,9 @@ export async function exportProject(
   const renderer = new GlimpseRenderer(canvas, project);
   const video = await loadRecordingVideo(project.recording.blob);
   renderer.attachVideo(video);
+  // Backdrop / overlay bitmaps decode async — wait for them or the first frames
+  // render against black textures.
+  await renderer.whenReady();
 
   const withAudio = audioExportable(project);
   const audio = withAudio
@@ -301,6 +304,7 @@ export async function exportStill(project: Project, tMs: number, scale = 2): Pro
   const video = await loadRecordingVideo(project.recording.blob);
   try {
     renderer.attachVideo(video);
+    await renderer.whenReady();
     await seekTo(video, tMs / 1000);
     renderer.render(sampleFrame(project, tMs));
     return await new Promise<Blob>((res, rej) =>
@@ -325,26 +329,30 @@ async function exportRealtimeFallback(
   const renderer = new GlimpseRenderer(canvas, project);
   const video = await loadRecordingVideo(project.recording.blob);
   renderer.attachVideo(video);
+  await renderer.whenReady();
 
   const stream = canvas.captureStream(fps);
   const chunks: BlobPart[] = [];
   const rec = new MediaRecorder(stream, { videoBitsPerSecond: 16_000_000 });
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
 
-  const durationMs = project.recording.duration;
-  const totalFrames = Math.floor((durationMs / 1000) * fps);
+  // Honour the in/out trim just like the WebCodecs path — play only the
+  // trimmed span rather than the whole recording.
+  const trim = project.trim ?? { start: 0, end: project.recording.duration };
+  const totalFrames = Math.max(1, Math.floor(((trim.end - trim.start) / 1000) * fps));
 
+  video.currentTime = trim.start / 1000;
   await video.play();
   rec.start(250);
 
   await new Promise<void>((resolve) => {
     const tick = () => {
-      if (signal?.aborted || video.ended || video.currentTime * 1000 >= durationMs) {
+      if (signal?.aborted || video.ended || video.currentTime * 1000 >= trim.end) {
         return resolve();
       }
       const tMs = video.currentTime * 1000;
       renderer.render(sampleFrame(project, tMs));
-      onProgress({ frame: Math.floor((tMs / 1000) * fps), totalFrames });
+      onProgress({ frame: Math.floor(((tMs - trim.start) / 1000) * fps), totalFrames });
       requestAnimationFrame(tick);
     };
     tick();

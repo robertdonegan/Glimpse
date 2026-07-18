@@ -136,6 +136,12 @@ export interface Overlay {
   start: Ms;
   end: Ms;
   opacity: number;
+  /**
+   * Render in screen space, above the tilted/scaled scene (idents, lower
+   * thirds, titles). When false the graphic is composited onto the recording
+   * and tilts/zooms with it.
+   */
+  flat?: boolean;
 }
 
 /** An imported audio track (music / voice-over) mixed under the recording. */

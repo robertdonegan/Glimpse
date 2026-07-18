@@ -39,6 +39,12 @@ interface GlimpseState {
   exporting: boolean;
   exportProgress: ExportProgress | null;
 
+  // Undo / redo history (project snapshots — playback state is excluded).
+  past: Project[];
+  future: Project[];
+  undo: () => void;
+  redo: () => void;
+
   startRecording: (
     preferCurrentTab: boolean,
     withAudio: boolean,
@@ -109,7 +115,33 @@ function stamp(): string {
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 }
 
-export const useGlimpse = create<GlimpseState>((set, get) => ({
+/** How far back the undo stack remembers. */
+const HISTORY_LIMIT = 60;
+/** Edits closer together than this collapse into one undo step (drag = 1 step). */
+const COALESCE_MS = 350;
+
+export const useGlimpse = create<GlimpseState>((set, get) => {
+  let lastCommit = 0;
+
+  /**
+   * Apply a project change while recording an undo step. Rapid successive
+   * edits (a slider drag) coalesce into a single step; discrete actions each
+   * get their own — so one Cmd+Z undoes an accidental Auto-zoom.
+   */
+  const commit = (next: Project): void => {
+    const cur = get().project;
+    if (!cur) {
+      set({ project: next });
+      return;
+    }
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const coalesce = now - lastCommit < COALESCE_MS && get().past.length > 0;
+    lastCommit = now;
+    const past = coalesce ? get().past : [...get().past, cur].slice(-HISTORY_LIMIT);
+    set({ project: next, past, future: [] });
+  };
+
+  return {
   screen: 'welcome',
   project: null,
   active: null,
@@ -120,6 +152,30 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
   previewRate: 1,
   exporting: false,
   exportProgress: null,
+  past: [],
+  future: [],
+
+  undo: () => {
+    const { past, project, future } = get();
+    if (past.length === 0 || !project) return;
+    lastCommit = 0; // never coalesce across an undo boundary
+    set({
+      project: past[past.length - 1],
+      past: past.slice(0, -1),
+      future: [project, ...future].slice(0, HISTORY_LIMIT),
+    });
+  },
+
+  redo: () => {
+    const { future, project, past } = get();
+    if (future.length === 0 || !project) return;
+    lastCommit = 0;
+    set({
+      project: future[0],
+      future: future.slice(1),
+      past: [...past, project].slice(-HISTORY_LIMIT),
+    });
+  },
 
   startRecording: async (preferCurrentTab, withAudio, keepScreen = false) => {
     const active = await beginRecording({ preferCurrentTab, audio: withAudio });
@@ -176,11 +232,27 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
     if (recording.clicks.length > 0) {
       project.zooms = generateAutoZooms(recording.clicks, recording.duration);
     }
-    set({ project, screen: 'editor', playhead: 0, playing: false, fileHandle: null });
+    set({
+      project,
+      screen: 'editor',
+      playhead: 0,
+      playing: false,
+      fileHandle: null,
+      past: [],
+      future: [],
+    });
   },
 
   discardProject: () =>
-    set({ project: null, screen: 'welcome', playhead: 0, playing: false, fileHandle: null }),
+    set({
+      project: null,
+      screen: 'welcome',
+      playhead: 0,
+      playing: false,
+      fileHandle: null,
+      past: [],
+      future: [],
+    }),
 
   saveProject: async (as = false) => {
     const { project, fileHandle } = get();
@@ -203,6 +275,8 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
         screen: 'editor',
         playhead: 0,
         playing: false,
+        past: [],
+        future: [],
       });
     } catch (e) {
       if ((e as DOMException)?.name === 'AbortError') return;
@@ -212,7 +286,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
 
   setProjectName: (name) => {
     const p = get().project;
-    if (p) set({ project: { ...p, name } });
+    if (p) commit({ ...p, name });
   },
 
   setPlayhead: (t) => {
@@ -240,19 +314,19 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
     const t = { ...p.trim, ...patch };
     t.start = Math.max(0, Math.min(t.start, d - 100));
     t.end = Math.max(t.start + 100, Math.min(t.end, d));
-    set({ project: { ...p, trim: t } });
+    commit({ ...p, trim: t });
   },
 
   updateStyle: (patch) => {
     const p = get().project;
     if (!p) return;
-    set({ project: { ...p, style: { ...p.style, ...patch } } });
+    commit({ ...p, style: { ...p.style, ...patch } });
   },
 
   patchStyle: (key, value) => {
     const p = get().project;
     if (!p) return;
-    set({ project: { ...p, style: { ...p.style, [key]: value } } });
+    commit({ ...p, style: { ...p.style, [key]: value } });
   },
 
   addZoomAt: (t) => {
@@ -268,33 +342,26 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
       ramp: 600,
       speed: 1,
     };
-    set({
-      project: { ...p, zooms: normaliseZooms([...p.zooms, seg], p.recording.duration) },
-    });
+    commit({ ...p, zooms: normaliseZooms([...p.zooms, seg], p.recording.duration) });
   },
 
   updateZoom: (id, patch) => {
     const p = get().project;
     if (!p) return;
     const zooms = p.zooms.map((z) => (z.id === id ? { ...z, ...patch } : z));
-    set({ project: { ...p, zooms: normaliseZooms(zooms, p.recording.duration) } });
+    commit({ ...p, zooms: normaliseZooms(zooms, p.recording.duration) });
   },
 
   removeZoom: (id) => {
     const p = get().project;
     if (!p) return;
-    set({ project: { ...p, zooms: p.zooms.filter((z) => z.id !== id) } });
+    commit({ ...p, zooms: p.zooms.filter((z) => z.id !== id) });
   },
 
   applyAutoZoom: () => {
     const p = get().project;
     if (!p) return;
-    set({
-      project: {
-        ...p,
-        zooms: generateAutoZooms(p.recording.clicks, p.recording.duration),
-      },
-    });
+    commit({ ...p, zooms: generateAutoZooms(p.recording.clicks, p.recording.duration) });
   },
 
   addOverlay: (file) => {
@@ -313,7 +380,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
         end: p.recording.duration,
         opacity: 1,
       };
-      set({ project: { ...p, overlays: [...p.overlays, overlay] } });
+      commit({ ...p, overlays: [...p.overlays, overlay] });
     };
     reader.readAsDataURL(file);
   },
@@ -321,18 +388,16 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
   updateOverlay: (id, patch) => {
     const p = get().project;
     if (!p) return;
-    set({
-      project: {
-        ...p,
-        overlays: p.overlays.map((o) => (o.id === id ? { ...o, ...patch } : o)),
-      },
+    commit({
+      ...p,
+      overlays: p.overlays.map((o) => (o.id === id ? { ...o, ...patch } : o)),
     });
   },
 
   removeOverlay: (id) => {
     const p = get().project;
     if (!p) return;
-    set({ project: { ...p, overlays: p.overlays.filter((o) => o.id !== id) } });
+    commit({ ...p, overlays: p.overlays.filter((o) => o.id !== id) });
   },
 
   addMusic: async (file) => {
@@ -356,19 +421,19 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
       gain: 0.8,
       blob: file,
     };
-    set({ project: { ...get().project!, music } });
+    commit({ ...get().project!, music });
   },
 
   updateMusic: (patch) => {
     const p = get().project;
     if (!p?.music) return;
-    set({ project: { ...p, music: { ...p.music, ...patch } } });
+    commit({ ...p, music: { ...p.music, ...patch } });
   },
 
   removeMusic: () => {
     const p = get().project;
     if (!p) return;
-    set({ project: { ...p, music: undefined } });
+    commit({ ...p, music: undefined });
   },
 
   setPreviewRate: (previewRate) => set({ previewRate }),
@@ -396,4 +461,5 @@ export const useGlimpse = create<GlimpseState>((set, get) => ({
       set({ exporting: false });
     }
   },
-}));
+  };
+});

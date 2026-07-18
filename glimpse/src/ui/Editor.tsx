@@ -11,11 +11,29 @@ export function Editor() {
   const openProject = useGlimpse((s) => s.openProject);
   const setProjectName = useGlimpse((s) => s.setProjectName);
   const project = useGlimpse((s) => s.project);
+  const undo = useGlimpse((s) => s.undo);
+  const redo = useGlimpse((s) => s.redo);
+  const canUndo = useGlimpse((s) => s.past.length > 0);
+  const canRedo = useGlimpse((s) => s.future.length > 0);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
 
-  // Space = play/pause (trim-aware), ←/→ = frame step.
+  // Space = play/pause (trim-aware), ←/→ = frame step, Cmd/Ctrl+Z undo/redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const st = useGlimpse.getState();
+      if (!st.project) return;
+      // Undo/redo work even from inputs — they're global editor actions.
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) st.redo();
+        else st.undo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        st.redo();
+        return;
+      }
       const t = e.target as HTMLElement;
       if (
         t.tagName === 'INPUT' ||
@@ -25,8 +43,6 @@ export function Editor() {
       ) {
         return;
       }
-      const st = useGlimpse.getState();
-      if (!st.project) return;
       if (e.code === 'Space') {
         e.preventDefault();
         st.togglePlay();
@@ -68,6 +84,24 @@ export function Editor() {
               ? 'Cursor as data'
               : 'Cursor baked in'}
           </span>
+          <button
+            className="btn quiet"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+            aria-label="Undo"
+          >
+            ↶
+          </button>
+          <button
+            className="btn quiet"
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⇧⌘Z)"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
           <button className="btn quiet" onClick={confirmNew}>
             New
           </button>

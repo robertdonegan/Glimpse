@@ -64,9 +64,11 @@ const BACKDROP_FRAG = /* glsl */ `
       float t = clamp(dot(vUv - 0.5, dir) + 0.5, 0.0, 1.0);
       col = mix(colorA, colorB, t);
     }
-    // Subtle dither to kill gradient banding.
-    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-    gl_FragColor = vec4(col + (n - 0.5) / 255.0, 1.0);
+    // Interleaved gradient noise dither — kills gradient banding without the
+    // structured diagonal streaks a sin-based hash leaves down the frame.
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+      vec2(0.06711056, 0.00583715))));
+    gl_FragColor = vec4(col + (ign - 0.5) / 255.0, 1.0);
   }
 `;
 
@@ -114,7 +116,7 @@ const VIDEO_FRAG = /* glsl */ `
     // break banding without dissolving into grain.
     const int TAPS = 32;
     float rot = (6.2831853 / float(TAPS)) *
-      fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     vec2 uvPerWorld = 1.0 / planeSize;
     vec3 acc = texture2D(map, vUv).rgb;
     float accA = rectAlpha(vUv);
@@ -218,6 +220,9 @@ function makeCursorTexture(kind: CursorTexKind, color: string): THREE.Texture {
     ctx.fill(path);
   }
   const tex = new THREE.CanvasTexture(cv);
+  // Author colour is sRGB — without this the cursor renders washed-out (a
+  // bright blue reads as pale), which the tilt + DoF only made more obvious.
+  tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   return tex;
 }
@@ -234,6 +239,7 @@ function makeRingTexture(): THREE.Texture {
   ctx.lineWidth = s * 0.05;
   ctx.stroke();
   const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   return tex;
 }
@@ -242,8 +248,10 @@ function makeRingTexture(): THREE.Texture {
 function loadOverlayTexture(
   src: string,
   onReady: (tex: THREE.Texture, aspect: number) => void,
+  onError?: () => void,
 ): void {
   const img = new Image();
+  img.onerror = () => onError?.();
   img.onload = () => {
     const w = img.naturalWidth || 512;
     const h = img.naturalHeight || 512;
@@ -265,6 +273,8 @@ interface OverlayNode {
   mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   src: string;
   aspect: number;
+  /** Parented to hudGroup (screen space) rather than zoomGroup (tilts/scales). */
+  flat: boolean;
 }
 
 type FlatMaterial = THREE.MeshBasicMaterial;
@@ -277,6 +287,8 @@ export class GlimpseRenderer {
   private backdrop: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private poseGroup = new THREE.Group();
   private zoomGroup = new THREE.Group();
+  /** Flat graphics (idents, titles) — screen space, above the tilted scene. */
+  private hudGroup = new THREE.Group();
   private videoPlane: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private shadowPlane: THREE.Mesh;
   private cursorMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
@@ -293,6 +305,9 @@ export class GlimpseRenderer {
 
   private overlays = new Map<string, OverlayNode>();
   private overlayList: Overlay[] = [];
+
+  /** In-flight async texture decodes — awaited by whenReady() before export. */
+  private pending: Promise<unknown>[] = [];
 
   /** Live style — refreshed on every applyStyle so edits actually land. */
   private style: StyleSettings;
@@ -386,6 +401,9 @@ export class GlimpseRenderer {
     this.zoomGroup.add(this.shadowPlane, this.videoPlane, this.cursorMesh, this.ringMesh);
     this.poseGroup.add(this.zoomGroup);
     this.scene.add(this.poseGroup);
+    // hudGroup sits at scene root — never inherits pose tilt or zoom scale, so
+    // flat graphics stay pinned to the output frame. Added last = drawn on top.
+    this.scene.add(this.hudGroup);
 
     this.setCursorTexture('default');
     this.applyStyle(project.style);
@@ -439,17 +457,26 @@ export class GlimpseRenderer {
     const alive = new Set(overlays.map((o) => o.id));
     for (const [id, node] of this.overlays) {
       if (!alive.has(id)) {
-        this.zoomGroup.remove(node.mesh);
+        node.mesh.removeFromParent();
         (node.mesh.material.map as THREE.Texture | null)?.dispose();
         node.mesh.material.dispose();
         this.overlays.delete(id);
       }
     }
     for (const o of overlays) {
+      const flat = !!o.flat;
       const existing = this.overlays.get(o.id);
-      if (existing && existing.src === o.imageData) continue;
       if (existing) {
-        this.zoomGroup.remove(existing.mesh);
+        // Flat flag flipped — move the mesh between screen space and the
+        // tilted/scaled scene, keeping the already-decoded texture.
+        if (existing.flat !== flat) {
+          existing.mesh.removeFromParent();
+          existing.mesh.renderOrder = flat ? 20 : 5;
+          (flat ? this.hudGroup : this.zoomGroup).add(existing.mesh);
+          existing.flat = flat;
+        }
+        if (existing.src === o.imageData) continue;
+        existing.mesh.removeFromParent();
         (existing.mesh.material.map as THREE.Texture | null)?.dispose();
         existing.mesh.material.dispose();
         this.overlays.delete(o.id);
@@ -463,20 +490,30 @@ export class GlimpseRenderer {
           opacity: 0,
         }),
       );
-      mesh.renderOrder = 5;
+      mesh.renderOrder = flat ? 20 : 5;
       mesh.visible = false;
-      this.zoomGroup.add(mesh);
-      const node: OverlayNode = { mesh, src: o.imageData, aspect: 1 };
+      (flat ? this.hudGroup : this.zoomGroup).add(mesh);
+      const node: OverlayNode = { mesh, src: o.imageData, aspect: 1, flat };
       this.overlays.set(o.id, node);
-      loadOverlayTexture(o.imageData, (tex, aspect) => {
-        if (this.overlays.get(o.id) !== node) {
-          tex.dispose();
-          return;
-        }
-        node.aspect = aspect;
-        mesh.material.map = tex;
-        mesh.material.needsUpdate = true;
-      });
+      this.pending.push(
+        new Promise<void>((resolve) => {
+          loadOverlayTexture(
+            o.imageData,
+            (tex, aspect) => {
+              if (this.overlays.get(o.id) !== node) {
+                tex.dispose();
+                resolve();
+                return;
+              }
+              node.aspect = aspect;
+              mesh.material.map = tex;
+              mesh.material.needsUpdate = true;
+              resolve();
+            },
+            resolve,
+          );
+        }),
+      );
     }
   }
 
@@ -492,19 +529,40 @@ export class GlimpseRenderer {
       return;
     }
     this.backdropImageSrc = src;
-    const img = new Image();
-    img.onload = () => {
-      if (this.backdropImageSrc !== src) return; // superseded meanwhile
-      this.backdropImage?.dispose();
-      const tex = new THREE.Texture(img);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.needsUpdate = true;
-      this.backdropImage = tex;
-      u.image.value = tex;
-      u.imageAspect.value = img.width / img.height;
-      u.useImage.value = 1;
-    };
-    img.src = src;
+    // Hold useImage off until the bitmap actually lands — otherwise a single
+    // export frame can sample a null texture and render solid black.
+    u.useImage.value = 0;
+    this.pending.push(
+      new Promise<void>((resolve) => {
+        const img = new Image();
+        const done = () => resolve();
+        img.onerror = done;
+        img.onload = () => {
+          if (this.backdropImageSrc === src) {
+            this.backdropImage?.dispose();
+            const tex = new THREE.Texture(img);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.needsUpdate = true;
+            this.backdropImage = tex;
+            u.image.value = tex;
+            u.imageAspect.value = img.width / img.height;
+            u.useImage.value = 1;
+          }
+          done();
+        };
+        img.src = src;
+      }),
+    );
+  }
+
+  /** Resolve once every pending image decode has landed — export waits on this
+   * so the first rendered frame never samples an unloaded (black) texture. */
+  async whenReady(): Promise<void> {
+    while (this.pending.length) {
+      const batch = this.pending;
+      this.pending = [];
+      await Promise.allSettled(batch);
+    }
   }
 
   /** Fit the recording into view with padding; size the shadow and radius. */
@@ -572,14 +630,19 @@ export class GlimpseRenderer {
       const visible = frame.t >= o.start && frame.t <= o.end && !!node.mesh.material.map;
       node.mesh.visible = visible;
       if (visible) {
-        const w = o.scale * this.planeW;
-        const h = w / node.aspect;
-        node.mesh.scale.set(w, h, 1);
-        node.mesh.position.set(
-          (o.x - 0.5) * this.planeW,
-          (0.5 - o.y) * this.planeH,
-          0.06,
-        );
+        if (node.flat) {
+          // Flat idents size to the whole output frame, unaffected by tilt/zoom.
+          const viewW = this.viewH * this.camera.aspect;
+          const w = o.scale * viewW;
+          const h = w / node.aspect;
+          node.mesh.scale.set(w, h, 1);
+          node.mesh.position.set((o.x - 0.5) * viewW, (0.5 - o.y) * this.viewH, 0);
+        } else {
+          const w = o.scale * this.planeW;
+          const h = w / node.aspect;
+          node.mesh.scale.set(w, h, 1);
+          node.mesh.position.set((o.x - 0.5) * this.planeW, (0.5 - o.y) * this.planeH, 0.06);
+        }
         node.mesh.material.opacity = o.opacity;
       }
     }

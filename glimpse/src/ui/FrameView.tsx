@@ -154,9 +154,20 @@ export function FrameView() {
             only the page — Glimpse's chrome disappears.
           </p>
           <p>
-            Same-origin pages get cursor magic automatically. For your own apps on
-            another origin, paste the snippet (button above) into their HTML. Sites
-            that forbid embedding won't load here at all.
+            <strong>Most public sites won't load here.</strong> Google, GitHub and
+            nearly every SaaS app send <code>X-Frame-Options</code> / CSP{' '}
+            <code>frame-ancestors</code> headers that forbid embedding — a browser
+            security rule Glimpse can't override. Frame mode only works for pages
+            that <em>allow</em> being iframed (your own app, localhost, docs sites
+            you control).
+          </p>
+          <p>
+            Want cursor telemetry over <em>any</em> window or app — Figma, VS Code,
+            a native program? That needs OS-level capture, which the browser can't
+            do. Run the <strong>Glimpse desktop app</strong> (Tauri build): its
+            native capture records cursor-free pixels of the whole screen and logs
+            global mouse telemetry, so every zoom / follow / synthetic-cursor
+            effect works over anything on screen.
           </p>
         </div>
       )}

@@ -88,6 +88,7 @@ export function Timeline({
   const addMusic = useGlimpse((s) => s.addMusic);
   const updateMusic = useGlimpse((s) => s.updateMusic);
   const removeMusic = useGlimpse((s) => s.removeMusic);
+  const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const previewRate = useGlimpse((s) => s.previewRate);
   const setPreviewRate = useGlimpse((s) => s.setPreviewRate);
 
@@ -173,10 +174,32 @@ export function Timeline({
   };
 
   const hasClicks = project.recording.clicks.length > 0;
+  const flatOverlays = project.overlays.filter((o) => o.flat);
 
   const jump = (t: number) => {
     setPlaying(false);
     setPlayhead(t);
+  };
+
+  /** Drag a flat ident along the timeline to re-time it (keeps its length). */
+  const onIdentPointerDown = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    const ov = project.overlays.find((o) => o.id === id);
+    if (!ov) return;
+    const grabOffset = timeAt(e.clientX) - ov.start;
+    const move = (ev: PointerEvent) => {
+      const o = useGlimpse.getState().project?.overlays.find((x) => x.id === id);
+      if (!o) return;
+      const len = o.end - o.start;
+      const start = Math.max(0, Math.min(timeAt(ev.clientX) - grabOffset, duration - len));
+      updateOverlay(id, { start, end: start + len });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   };
 
   /** Drag the music clip along the timeline to re-time it. */
@@ -385,6 +408,26 @@ export function Timeline({
           title="Drag to scrub"
         />
       </div>
+
+      {flatOverlays.length > 0 && (
+        <div className="idents-lane" title="Flat idents — drag to re-time">
+          {flatOverlays.map((o) => (
+            <div
+              key={o.id}
+              className="ident-clip"
+              style={{
+                left: `${(o.start / duration) * 100}%`,
+                width: `${((o.end - o.start) / duration) * 100}%`,
+              }}
+              onPointerDown={(e) => onIdentPointerDown(e, o.id)}
+              title={`${o.name} — drag to re-time`}
+            >
+              <span className="ident-label">{o.name}</span>
+            </div>
+          ))}
+          <div className="playhead" style={{ left: `${(playhead / duration) * 100}%` }} />
+        </div>
+      )}
 
       {(project.recording.audioBlob || project.music) && (
         <div className="audio-lane">

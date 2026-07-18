@@ -350,6 +350,10 @@ button {
   place-items: center;
   padding: 22px;
   min-height: 0;
+  min-width: 0;
+  /* Clip the canvas to its cell so a tall/large preview can never spill down
+     over the timeline transport buttons. */
+  overflow: hidden;
   background:
     radial-gradient(ellipse at 50% 40%, rgba(127, 127, 127, 0.05), transparent 60%);
 }
@@ -377,6 +381,10 @@ button {
   border-top: 1px solid var(--line);
   padding: 12px 14px 16px;
   user-select: none;
+  /* Sit above the preview cell so nothing overlaps the transport controls. */
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
 }
 
 .timeline-head {
@@ -639,6 +647,45 @@ button {
   opacity: 1;
 }
 
+/* ---------- Idents lane (flat graphics over the top) ---------- */
+
+.idents-lane {
+  position: relative;
+  height: 26px;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ident-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: rgba(168, 85, 247, 0.18);
+  border: 1px solid rgba(168, 85, 247, 0.7);
+  border-radius: 6px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+.ident-clip:active {
+  cursor: grabbing;
+}
+
+.ident-label {
+  font-size: 11px;
+  color: rgba(216, 180, 254, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 /* ---------- Audio lane ---------- */
 
 .audio-lane {
@@ -789,6 +836,28 @@ button {
   color: var(--text-dim);
   width: 44px;
   text-align: right;
+}
+
+/* Editable value field — looks like the static readout until focused. */
+.row .value-input {
+  width: 52px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  cursor: text;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.row .value-input:hover {
+  border-color: var(--line);
+}
+
+.row .value-input:focus {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
 }
 
 .row select,

@@ -138,25 +138,33 @@ export function sampleFrame(project: Project, t: number): FrameState {
     };
   }
 
-  // Follow-cam: the zoom tracks a trailing average of the cursor path — calm,
-  // deterministic (same t always gives the same shot), export-safe.
+  // Follow-cam: the zoom tracks a trailing Gaussian-weighted average of the
+  // cursor path — calm, deterministic (same t always gives the same shot),
+  // export-safe. A wide window (720ms) with a soft centre lag glides the
+  // camera instead of snapping to every jitter, which is what made the old
+  // 4-tap boxcar feel jerky.
   if (seg?.follow && recording.cursor.length > 0) {
     const k = rampK(seg, t);
+    const WINDOW = 720; // ms of history to average over
+    const STEP = 60; // sample spacing
+    const CENTER = 200; // lag the weighting favours (gentle trailing)
+    const SIGMA = 240; // spread of the Gaussian kernel
     let ax = 0;
     let ay = 0;
-    let n = 0;
-    for (const lag of [0, 120, 240, 360]) {
+    let wsum = 0;
+    for (let lag = 0; lag <= WINDOW; lag += STEP) {
       const p = sampleCursor(recording.cursor, Math.max(0, t - lag), 1);
-      if (p) {
-        ax += p.x;
-        ay += p.y;
-        n++;
-      }
+      if (!p) continue;
+      const d = lag - CENTER;
+      const w = Math.exp(-(d * d) / (2 * SIGMA * SIGMA));
+      ax += p.x * w;
+      ay += p.y * w;
+      wsum += w;
     }
-    if (n > 0) {
+    if (wsum > 0) {
       const half = 0.5 / Math.max(camera.scale, 1e-3);
-      camera.focusX = lerp(0.5, clamp(ax / n, half, 1 - half), k);
-      camera.focusY = lerp(0.5, clamp(ay / n, half, 1 - half), k);
+      camera.focusX = lerp(0.5, clamp(ax / wsum, half, 1 - half), k);
+      camera.focusY = lerp(0.5, clamp(ay / wsum, half, 1 - half), k);
     }
   }
 

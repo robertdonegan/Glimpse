@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
 import type { CursorStyle } from '../timeline/model';
 import { audioExportable } from '../export/exporter';
+import { clamp } from '../timeline/easing';
 
 function SliderRow({
   label,
@@ -10,6 +11,7 @@ function SliderRow({
   max,
   step,
   format,
+  parse,
   onChange,
 }: {
   label: string;
@@ -18,8 +20,27 @@ function SliderRow({
   max: number;
   step: number;
   format?: (v: number) => string;
+  /**
+   * Map a number typed in *display* units back to the stored value (e.g. "7"
+   * for 7% → 0.07). Identity when omitted.
+   */
+  parse?: (displayNum: number) => number;
   onChange: (v: number) => void;
 }) {
+  // While the field is focused it holds a free-text draft; on blur/Enter the
+  // draft is parsed, mapped through `parse`, and clamped into range.
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = format ? format(value) : String(value);
+
+  const commitDraft = (raw: string) => {
+    const num = parseFloat(raw);
+    if (!Number.isNaN(num)) {
+      const mapped = parse ? parse(num) : num;
+      onChange(clamp(mapped, min, max));
+    }
+    setDraft(null);
+  };
+
   return (
     <div className="row">
       <label>{label}</label>
@@ -32,7 +53,26 @@ function SliderRow({
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label={label}
       />
-      <span className="value">{format ? format(value) : value}</span>
+      <input
+        className="value value-input"
+        type="text"
+        inputMode="decimal"
+        value={draft ?? display}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => {
+          setDraft(String(parseFloat(display)));
+          requestAnimationFrame(() => e.target.select());
+        }}
+        onBlur={(e) => commitDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          else if (e.key === 'Escape') {
+            setDraft(null);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        aria-label={`${label} value`}
+      />
     </div>
   );
 }
@@ -158,6 +198,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.05}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => patchStyle('cursor', { ...style.cursor, smoothing: v })}
             />
             <div className="row">
@@ -210,6 +251,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           max={0.22}
           step={0.01}
           format={(v) => `${Math.round(v * 100)}%`}
+          parse={(n) => n / 100}
           onChange={(v) => patchStyle('padding', v)}
         />
         <SliderRow
@@ -349,6 +391,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.05}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => patchStyle('dof', { ...style.dof, strength: v })}
             />
             <p className="hint">
@@ -393,8 +436,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <SliderRow
           label="Tilt X"
           value={style.pose.rotX}
-          min={-45}
-          max={45}
+          min={-75}
+          max={75}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotX: v })}
@@ -402,8 +445,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <SliderRow
           label="Turn Y"
           value={style.pose.rotY}
-          min={-45}
-          max={45}
+          min={-75}
+          max={75}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotY: v })}
@@ -460,6 +503,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             max={1}
             step={0.01}
             format={(v) => `${Math.round(v * 100)}%`}
+            parse={(n) => n / 100}
             onChange={(v) => updateZoom(zoom.id, { focusX: v })}
           />
           <SliderRow
@@ -469,6 +513,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             max={1}
             step={0.01}
             format={(v) => `${Math.round(v * 100)}%`}
+            parse={(n) => n / 100}
             onChange={(v) => updateZoom(zoom.id, { focusY: v })}
           />
           <SliderRow
@@ -498,8 +543,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               <SliderRow
                 label="Tilt X"
                 value={zoom.pose.rotX}
-                min={-45}
-                max={45}
+                min={-75}
+                max={75}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotX: v } })}
@@ -507,8 +552,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               <SliderRow
                 label="Turn Y"
                 value={zoom.pose.rotY}
-                min={-45}
-                max={45}
+                min={-75}
+                max={75}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotY: v } })}
@@ -543,6 +588,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             max={1}
             step={0.05}
             format={(v) => `${Math.round(v * 100)}%`}
+            parse={(n) => n / 100}
             onChange={(v) => useGlimpse.getState().updateMusic({ gain: v })}
           />
           <p className="hint">Drag the blue clip on the timeline to re-time it.</p>
@@ -550,10 +596,14 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
       )}
 
       <div className="section">
-        <h3>Overlays</h3>
+        <h3>Overlays &amp; idents</h3>
         <button className="chip" onClick={() => overlayInput.current?.click()}>
           Add graphic (SVG, PNG…)
         </button>
+        <p className="hint" style={{ marginTop: 6 }}>
+          Toggle “Flat ident” on a graphic to pin it over the whole frame,
+          unaffected by tilt or zoom — for titles and logos.
+        </p>
         <input
           ref={overlayInput}
           type="file"
@@ -575,6 +625,15 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
                 ×
               </button>
             </div>
+            <div className="row">
+              <label>Flat ident</label>
+              <input
+                type="checkbox"
+                checked={!!o.flat}
+                onChange={(e) => updateOverlay(o.id, { flat: e.target.checked })}
+                title="Pin to the output frame (titles, idents) — ignores 3D tilt and zoom"
+              />
+            </div>
             <SliderRow
               label="X"
               value={o.x}
@@ -582,6 +641,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.01}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => updateOverlay(o.id, { x: v })}
             />
             <SliderRow
@@ -591,6 +651,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.01}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => updateOverlay(o.id, { y: v })}
             />
             <SliderRow
@@ -600,6 +661,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.01}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => updateOverlay(o.id, { scale: v })}
             />
             <SliderRow
@@ -609,6 +671,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={1}
               step={0.05}
               format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
               onChange={(v) => updateOverlay(o.id, { opacity: v })}
             />
             <SliderRow
@@ -618,6 +681,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={recording.duration}
               step={100}
               format={(v) => `${(v / 1000).toFixed(1)}s`}
+              parse={(n) => n * 1000}
               onChange={(v) => updateOverlay(o.id, { start: Math.min(v, o.end - 100) })}
             />
             <SliderRow
@@ -627,6 +691,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               max={recording.duration}
               step={100}
               format={(v) => `${(v / 1000).toFixed(1)}s`}
+              parse={(n) => n * 1000}
               onChange={(v) => updateOverlay(o.id, { end: Math.max(v, o.start + 100) })}
             />
           </div>
@@ -650,6 +715,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           >
             <option value={30}>30 fps</option>
             <option value={60}>60 fps</option>
+            <option value={120}>120 fps</option>
           </select>
         </div>
         <button
