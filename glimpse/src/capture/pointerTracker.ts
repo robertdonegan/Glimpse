@@ -16,6 +16,22 @@ export interface PointerLog {
   clicks: ClickEvent[];
 }
 
+const INTERACTIVE_SELECTOR =
+  'a, button, [role="button"], [role="link"], [role="tab"], [role="menuitem"], ' +
+  'input, select, textarea, label, summary, [onclick], [contenteditable="true"]';
+
+/** Should the recorded cursor show as a hand here? Mirrors CSS `cursor: pointer`. */
+function isInteractive(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  if (!el) return false;
+  if (el.closest(INTERACTIVE_SELECTOR)) return true;
+  try {
+    return window.getComputedStyle(el).cursor === 'pointer';
+  } catch {
+    return false;
+  }
+}
+
 export class PointerTracker {
   private cursor: CursorSample[] = [];
   private clicks: ClickEvent[] = [];
@@ -35,6 +51,7 @@ export class PointerTracker {
       t,
       x: e.clientX / window.innerWidth,
       y: e.clientY / window.innerHeight,
+      hand: isInteractive(e.target),
     });
   };
 
@@ -48,6 +65,38 @@ export class PointerTracker {
     });
   };
 
+  /**
+   * Telemetry relayed from a framed page (frame mode). Cross-origin iframes
+   * swallow pointer events, so the embedded glimpse-bridge script streams
+   * them up via postMessage in iframe-viewport coordinates — which equal
+   * tab coordinates while recording (the iframe is fullscreen then).
+   */
+  private onMessage = (e: MessageEvent) => {
+    if (!this.running) return;
+    const d = e.data as {
+      __glimpse?: boolean;
+      type?: string;
+      x?: number;
+      y?: number;
+      hand?: boolean;
+      button?: number;
+    };
+    if (!d || d.__glimpse !== true) return;
+    if (d.type === 'move' && typeof d.x === 'number' && typeof d.y === 'number') {
+      const t = performance.now() - this.t0;
+      if (t - this.lastSampleT < this.minInterval) return;
+      this.lastSampleT = t;
+      this.cursor.push({ t, x: d.x, y: d.y, hand: !!d.hand });
+    } else if (d.type === 'down' && typeof d.x === 'number' && typeof d.y === 'number') {
+      this.clicks.push({
+        t: performance.now() - this.t0,
+        x: d.x,
+        y: d.y,
+        button: d.button ?? 0,
+      });
+    }
+  };
+
   start(startTime: number): void {
     this.t0 = startTime;
     this.cursor = [];
@@ -56,12 +105,14 @@ export class PointerTracker {
     this.running = true;
     window.addEventListener('pointermove', this.onMove, { capture: true, passive: true });
     window.addEventListener('pointerdown', this.onDown, { capture: true, passive: true });
+    window.addEventListener('message', this.onMessage);
   }
 
   stop(): PointerLog {
     this.running = false;
     window.removeEventListener('pointermove', this.onMove, { capture: true });
     window.removeEventListener('pointerdown', this.onDown, { capture: true });
+    window.removeEventListener('message', this.onMessage);
     return { cursor: this.cursor, clicks: this.clicks };
   }
 }

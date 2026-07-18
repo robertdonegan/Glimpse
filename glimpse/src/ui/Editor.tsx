@@ -1,32 +1,123 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGlimpse } from '../state/store';
 import { Preview } from './Preview';
 import { Timeline } from './Timeline';
 import { Inspector } from './Inspector';
+import { ThemeToggle } from './ThemeToggle';
 
 export function Editor() {
   const discardProject = useGlimpse((s) => s.discardProject);
+  const saveProject = useGlimpse((s) => s.saveProject);
+  const openProject = useGlimpse((s) => s.openProject);
+  const setProjectName = useGlimpse((s) => s.setProjectName);
   const project = useGlimpse((s) => s.project);
+  const undo = useGlimpse((s) => s.undo);
+  const redo = useGlimpse((s) => s.redo);
+  const canUndo = useGlimpse((s) => s.past.length > 0);
+  const canRedo = useGlimpse((s) => s.future.length > 0);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
 
+  // Space = play/pause (trim-aware), ←/→ = frame step, Cmd/Ctrl+Z undo/redo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const st = useGlimpse.getState();
+      if (!st.project) return;
+      // Undo/redo work even from inputs — they're global editor actions.
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) st.redo();
+        else st.undo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        st.redo();
+        return;
+      }
+      const t = e.target as HTMLElement;
+      if (
+        t.tagName === 'INPUT' ||
+        t.tagName === 'SELECT' ||
+        t.tagName === 'TEXTAREA' ||
+        t.isContentEditable
+      ) {
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        st.togglePlay();
+      } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        const frame = 1000 / st.project.output.fps;
+        st.setPlaying(false);
+        st.setPlayhead(st.playhead + (e.code === 'ArrowLeft' ? -frame : frame));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (!project) return null;
+
+  const confirmNew = () => {
+    if (window.confirm('Start a new recording? Unsaved changes will be lost.')) {
+      discardProject();
+    }
+  };
 
   return (
     <div className="editor">
       <header className="topbar">
-        <span className="wordmark">Glimpse</span>
+        <div className="topbar-left">
+          <span className="wordmark">Glimpse</span>
+          <input
+            className="project-name"
+            value={project.name}
+            onChange={(e) => setProjectName(e.target.value)}
+            aria-label="Project name"
+            spellCheck={false}
+          />
+        </div>
         <div className="topbar-actions">
           <span className="timecode">
-            {project.recording.mode === 'tab'
-              ? 'Tab recording — cursor as data'
-              : 'Pixel recording — cursor baked in'}
+            {project.recording.cursor.length > 0
+              ? 'Cursor as data'
+              : 'Cursor baked in'}
           </span>
-          <button className="btn quiet" onClick={discardProject}>
-            New recording
+          <button
+            className="btn quiet"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+            aria-label="Undo"
+          >
+            ↶
           </button>
+          <button
+            className="btn quiet"
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⇧⌘Z)"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
+          <button className="btn quiet" onClick={confirmNew}>
+            New
+          </button>
+          <button className="btn quiet" onClick={() => void openProject()}>
+            Open
+          </button>
+          <button className="btn" onClick={() => void saveProject(false)}>
+            Save
+          </button>
+          <button className="btn quiet" onClick={() => void saveProject(true)}>
+            Save as…
+          </button>
+          <ThemeToggle />
         </div>
       </header>
-      <Preview />
+      <Preview selectedZoom={selectedZoom} />
       <Timeline selectedZoom={selectedZoom} onSelectZoom={setSelectedZoom} />
       <Inspector selectedZoom={selectedZoom} />
     </div>

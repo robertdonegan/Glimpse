@@ -1,22 +1,35 @@
-/* Glimpse — darkroom UI.
-   Palette: deep blue-charcoal base, hairline strokes, one warm "viewfinder
-   amber" accent reserved for state that matters (record, playhead, focus).
-   Signal red appears only while recording. */
+/* Glimpse — docs-clean UI, dark by default.
+   Palette: near-black base, hairline strokes, ink-on-paper accent (inverts
+   per theme). Signal red appears only while recording. */
 
 :root {
-  --bg: #101419;
-  --panel: #171c23;
-  --panel-raised: #1d232c;
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  --bg: #0b0e14;
+  --panel: #11151d;
+  --panel-raised: #171c26;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.18);
   --text: #e8eaed;
   --text-dim: #8a919c;
-  --amber: #e8a33d;
-  --amber-soft: rgba(232, 163, 61, 0.16);
+  --amber: #e8eaed; /* accent = ink; inverts with theme */
+  --amber-soft: rgba(232, 234, 237, 0.1);
+  --accent-contrast: #0b0e14; /* text on top of accent */
   --record: #e5484d;
-  --font-ui: 'Instrument Sans', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --radius: 10px;
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --radius: 8px;
+}
+
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --panel: #f9fafb;
+  --panel-raised: #f3f4f6;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+  --text: #111827;
+  --text-dim: #6b7280;
+  --amber: #111827;
+  --amber-soft: rgba(17, 24, 39, 0.06);
+  --accent-contrast: #ffffff;
 }
 
 * {
@@ -61,86 +74,68 @@ button {
   }
 }
 
-/* ---------- Welcome ---------- */
+/* ---------- Welcome (compact — usable in a small side window) ---------- */
 
 .welcome {
   height: 100%;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 16px;
 }
 
 .welcome-inner {
-  max-width: 560px;
+  max-width: 340px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
 }
 
 .wordmark {
-  font-size: 15px;
+  font-size: 12px;
   letter-spacing: 0.34em;
   text-transform: uppercase;
   color: var(--text-dim);
   font-family: var(--font-mono);
 }
 
-.welcome h1 {
-  font-size: clamp(30px, 5vw, 44px);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 18px 0 10px;
-}
-
-.welcome h1 em {
-  font-style: italic;
-  color: var(--amber);
-}
-
-.welcome p.lede {
-  color: var(--text-dim);
-  margin: 0 auto 36px;
-  max-width: 42ch;
-}
-
-/* The signature: an aperture-iris record button. */
+/* The signature: a circular record/play button. */
 .aperture {
-  width: 108px;
-  height: 108px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   border: 1px solid var(--line-strong);
   display: grid;
   place-items: center;
-  margin: 0 auto 14px;
-  position: relative;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.aperture svg {
-  transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  color: var(--amber);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .aperture:hover {
   border-color: var(--amber);
-  box-shadow: 0 0 0 6px var(--amber-soft);
+  box-shadow: 0 0 0 5px var(--amber-soft);
+  transform: scale(1.04);
 }
 
-.aperture:hover svg {
-  transform: rotate(28deg) scale(0.92);
+.aperture svg {
+  margin-left: 3px; /* optical centring of the triangle */
 }
 
 .capture-options {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
-  margin-top: 26px;
+  flex-wrap: wrap;
 }
 
 .capture-option {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px 18px;
+  padding: 9px 12px;
   text-align: left;
-  max-width: 230px;
+  max-width: 160px;
   transition: border-color 140ms ease, background 140ms ease;
 }
 
@@ -151,28 +146,34 @@ button {
 
 .capture-option strong {
   display: block;
-  margin-bottom: 3px;
+  font-size: 13px;
+  margin-bottom: 2px;
 }
 
 .capture-option span {
   color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.audio-toggle input {
+  accent-color: var(--amber);
+}
+
+.open-project {
   font-size: 12.5px;
 }
 
-.capture-option .tag {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--amber);
-  background: var(--amber-soft);
-  border-radius: 4px;
-  padding: 2px 6px;
-  margin-bottom: 8px;
-}
-
 .unsupported {
-  margin-top: 28px;
+  margin: 0;
   color: var(--text-dim);
   font-size: 12.5px;
 }
@@ -193,6 +194,17 @@ button {
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 10px 12px 10px 20px;
+}
+
+/* The recorder hides the cursor page-wide while capturing this tab; the
+   stop control must stay clickable, so it opts back in. */
+.recording-bar,
+.recording-bar * {
+  cursor: auto !important;
+}
+
+.recording-bar .stop-btn {
+  cursor: pointer !important;
 }
 
 .rec-dot {
@@ -255,8 +267,36 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .topbar .wordmark {
   font-size: 12px;
+}
+
+.project-name {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  padding: 4px 8px;
+  width: 180px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.project-name:hover {
+  border-color: var(--line);
+}
+
+.project-name:focus {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  outline: none;
 }
 
 .topbar-actions {
@@ -280,7 +320,7 @@ button {
 .btn.primary {
   background: var(--amber);
   border-color: var(--amber);
-  color: #17130a;
+  color: var(--accent-contrast);
   font-weight: 600;
 }
 
@@ -298,14 +338,24 @@ button {
   cursor: default;
 }
 
+.btn.on {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
 .preview-wrap {
   grid-area: preview;
   display: grid;
   place-items: center;
   padding: 22px;
   min-height: 0;
+  min-width: 0;
+  /* Clip the canvas to its cell so a tall/large preview can never spill down
+     over the timeline transport buttons. */
+  overflow: hidden;
   background:
-    radial-gradient(ellipse at 50% 40%, rgba(255, 255, 255, 0.03), transparent 60%);
+    radial-gradient(ellipse at 50% 40%, rgba(127, 127, 127, 0.05), transparent 60%);
 }
 
 .preview-canvas {
@@ -316,6 +366,14 @@ button {
   aspect-ratio: var(--preview-aspect, 16 / 9);
 }
 
+.preview-canvas.pannable {
+  cursor: grab;
+}
+
+.preview-canvas.pannable:active {
+  cursor: grabbing;
+}
+
 /* ---------- Timeline ---------- */
 
 .timeline {
@@ -323,6 +381,10 @@ button {
   border-top: 1px solid var(--line);
   padding: 12px 14px 16px;
   user-select: none;
+  /* Sit above the preview cell so nothing overlaps the transport controls. */
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
 }
 
 .timeline-head {
@@ -330,6 +392,8 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .timecode {
@@ -354,30 +418,71 @@ button {
   /* Film-edge tick marks — the timeline reads as a strip of footage. */
   background-image: repeating-linear-gradient(
     to right,
-    rgba(255, 255, 255, 0.05) 0 1px,
+    rgba(127, 127, 127, 0.12) 0 1px,
     transparent 1px 40px
   );
 }
 
+/* Segments hug the lower half — the scrub grip owns the top edge. */
 .zoom-seg {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 26px;
+  bottom: 6px;
   background: var(--amber-soft);
   border: 1px solid var(--amber);
   border-radius: 6px;
   cursor: grab;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--amber);
   transition: box-shadow 100ms ease;
+  overflow: hidden;
 }
 
 .zoom-seg.selected {
   box-shadow: 0 0 0 2px var(--amber);
+}
+
+.seg-label {
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Trim handles: drag to grow/shrink a clip (and so its screen time). */
+.seg-handle {
+  width: 8px;
+  align-self: stretch;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  position: relative;
+}
+
+.seg-handle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--amber);
+  opacity: 0.55;
+}
+
+.seg-handle.right::after {
+  left: auto;
+  right: 3px;
+}
+
+.zoom-seg:hover .seg-handle::after,
+.zoom-seg.selected .seg-handle::after {
+  opacity: 1;
 }
 
 .playhead {
@@ -385,7 +490,7 @@ button {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--amber);
+  background: var(--record);
   pointer-events: none;
 }
 
@@ -395,13 +500,248 @@ button {
   top: -1px;
   left: -3px;
   border: 4px solid transparent;
-  border-top-color: var(--amber);
+  border-top-color: var(--record);
+}
+
+/* Trimmed-out footage reads as dimmed film. */
+.trim-shade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(127, 127, 127, 0.28);
+  pointer-events: none;
+}
+
+.trim-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  cursor: ew-resize;
+  z-index: 2;
+}
+
+.trim-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 3px;
+  background: var(--amber);
+  border-radius: 2px;
+}
+
+/* Grab-me scrub handle riding the playhead. */
+.playhead-grip {
+  position: absolute;
+  top: -1px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--record);
+  border: 2px solid var(--bg);
+  cursor: grab;
+  z-index: 2;
+}
+
+.playhead-grip:active {
+  cursor: grabbing;
 }
 
 .timeline-actions {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.transport {
+  display: flex;
+  gap: 2px;
+}
+
+.transport .btn {
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1;
+  border-color: var(--line);
+}
+
+/* ---------- Frame mode ---------- */
+
+.frame-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.frame-url {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.frame-embed {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* Recording: the framed page IS the tab — nothing else visible. */
+.frame-embed.recording {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 5;
+}
+
+.frame-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  max-width: 52ch;
+  margin: 0 auto;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Invisible unless hovered — an escape hatch that stays out of the pixels. */
+.frame-stop {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--record);
+  color: #fff;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 150ms ease;
+  cursor: pointer !important;
+}
+
+.frame-stop:hover {
+  opacity: 1;
+}
+
+/* ---------- Idents lane (flat graphics over the top) ---------- */
+
+.idents-lane {
+  position: relative;
+  height: 26px;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ident-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: rgba(168, 85, 247, 0.18);
+  border: 1px solid rgba(168, 85, 247, 0.7);
+  border-radius: 6px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+.ident-clip:active {
+  cursor: grabbing;
+}
+
+.ident-label {
+  font-size: 11px;
+  color: rgba(216, 180, 254, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* ---------- Audio lane ---------- */
+
+.audio-lane {
+  position: relative;
+  height: 34px;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.audio-rec {
+  position: absolute;
+  inset: 0;
+}
+
+.waveform {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.music-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.7);
+  border-radius: 6px;
+  cursor: grab;
+  overflow: hidden;
+}
+
+.music-clip:active {
+  cursor: grabbing;
+}
+
+.music-remove {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 5px;
+  color: rgba(147, 197, 253, 0.95);
+}
+
+.rate-select {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
 }
 
 /* ---------- Inspector ---------- */
@@ -448,10 +788,46 @@ button {
   flex-shrink: 0;
 }
 
+/* Slim, classy range sliders: hairline trough, small round thumb. */
 .row input[type='range'] {
   flex: 1;
-  accent-color: var(--amber);
   min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+}
+
+.row input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.row input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
+}
+
+.row input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.row input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: none;
+  cursor: pointer;
 }
 
 .row .value {
@@ -460,6 +836,28 @@ button {
   color: var(--text-dim);
   width: 44px;
   text-align: right;
+}
+
+/* Editable value field — looks like the static readout until focused. */
+.row .value-input {
+  width: 52px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  cursor: text;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.row .value-input:hover {
+  border-color: var(--line);
+}
+
+.row .value-input:focus {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
 }
 
 .row select,
@@ -500,6 +898,18 @@ button {
   border-color: var(--amber);
   color: var(--amber);
   background: var(--amber-soft);
+}
+
+.overlay-item {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
+
+.overlay-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .export-progress {

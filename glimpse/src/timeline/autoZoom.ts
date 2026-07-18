@@ -64,6 +64,7 @@ export function generateAutoZooms(
       focusX: clamp(cx, 0.5 / o.scale, 1 - 0.5 / o.scale),
       focusY: clamp(cy, 0.5 / o.scale, 1 - 0.5 / o.scale),
       ramp: o.ramp,
+      speed: 1,
     };
   });
 
