@@ -10,10 +10,18 @@
 //     (the parent uses this to align cursor telemetry with the video)
 //   → SIGINT finalises the file and exits 0.
 
+import AppKit
 import Foundation
 import AVFoundation
 import CoreMedia
 import ScreenCaptureKit
+
+// ScreenCaptureKit / CoreGraphics need a window-server connection. As a plain
+// CLI tool we must initialise the Cocoa/CG session first, or CGS calls abort
+// with "CGS_REQUIRE_INIT (did_initialize)". Touching NSApplication.shared does
+// it; .prohibited keeps us headless (no dock icon).
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.prohibited)
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
@@ -45,12 +53,19 @@ if args[1] == "--list" {
                 "x": d.frame.origin.x, "y": d.frame.origin.y,
             ])
         }
+        let systemApps: Set<String> = [
+            "Dock", "Notification Centre", "Notification Center", "Window Server",
+            "WindowServer", "Control Centre", "Control Center", "Wallpaper",
+        ]
         for w in content.windows {
             guard let title = w.title, !title.isEmpty else { continue }
+            guard let app = w.owningApplication?.applicationName, !app.isEmpty else { continue }
+            if w.windowLayer != 0 { continue } // skip menubar / dock / widgets
+            if systemApps.contains(app) { continue }
             if w.frame.width < 80 || w.frame.height < 80 { continue }
             windows.append([
                 "id": w.windowID,
-                "app": w.owningApplication?.applicationName ?? "?",
+                "app": app,
                 "title": title,
                 "width": w.frame.width, "height": w.frame.height,
                 "x": w.frame.origin.x, "y": w.frame.origin.y,
