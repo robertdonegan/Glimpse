@@ -11,6 +11,7 @@ import { createProject, makeId } from '../timeline/model';
 import { generateAutoZooms } from '../timeline/autoZoom';
 import { beginRecording, type ActiveRecording } from '../capture/recorder';
 import { beginNativeRecording, type CaptureTarget } from '../capture/nativeCapture';
+import { enterCompactWindow, restoreWindow } from '../capture/appWindow';
 import {
   exportProject,
   exportGif,
@@ -224,12 +225,15 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
   startNativeRecording: async (withAudio, target) => {
     const active = await beginNativeRecording({ audio: withAudio, target });
     set({ active, screen: 'recording' });
+    // Shrink to a floating controller so the recorded screen behind is usable.
+    void enterCompactWindow();
   },
 
   stopRecording: async () => {
     const { active } = get();
     if (!active) return;
     set({ active: null });
+    void restoreWindow(); // back to full size for the editor
     let recording: Recording;
     try {
       recording = await active.stop();
