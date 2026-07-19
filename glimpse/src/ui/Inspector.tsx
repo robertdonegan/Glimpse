@@ -219,7 +219,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               label="Smoothing"
               value={style.cursor.smoothing}
               min={0}
-              max={1}
+              max={2}
               step={0.05}
               format={(v) => `${Math.round(v * 100)}%`}
               parse={(n) => n / 100}
@@ -254,6 +254,17 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
                   patchStyle('cursor', { ...style.cursor, color: e.target.value })
                 }
                 aria-label="Cursor colour"
+              />
+            </div>
+            <div className="row">
+              <label>Return to start</label>
+              <input
+                type="checkbox"
+                checked={style.cursor.returnToStart}
+                onChange={(e) =>
+                  patchStyle('cursor', { ...style.cursor, returnToStart: e.target.checked })
+                }
+                title="Ease the cursor back to its opening position at the end — for seamless loops"
               />
             </div>
           </>

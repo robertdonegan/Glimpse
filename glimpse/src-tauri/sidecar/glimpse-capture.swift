@@ -10,20 +10,80 @@
 //     (the parent uses this to align cursor telemetry with the video)
 //   → SIGINT finalises the file and exits 0.
 
+import AppKit
 import Foundation
 import AVFoundation
 import CoreMedia
 import ScreenCaptureKit
+
+// ScreenCaptureKit / CoreGraphics need a window-server connection. As a plain
+// CLI tool we must initialise the Cocoa/CG session first, or CGS calls abort
+// with "CGS_REQUIRE_INIT (did_initialize)". Touching NSApplication.shared does
+// it; .prohibited keeps us headless (no dock icon).
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.prohibited)
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
     FileHandle.standardError.write(Data("usage: glimpse-capture <out.mov> [audio 0|1]\n".utf8))
     exit(2)
 }
+// Fetch shareable content once, synchronously.
+func fetchShareable() -> SCShareableContent? {
+    var result: SCShareableContent?
+    let sem = DispatchSemaphore(value: 0)
+    SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { c, _ in
+        result = c
+        sem.signal()
+    }
+    sem.wait()
+    return result
+}
+
+// `glimpse-capture --list` → print displays + windows as JSON, then exit.
+if args[1] == "--list" {
+    var displays: [[String: Any]] = []
+    var windows: [[String: Any]] = []
+    if let content = fetchShareable() {
+        for (i, d) in content.displays.enumerated() {
+            displays.append([
+                "id": d.displayID,
+                "label": "Display \(i + 1) — \(d.width)×\(d.height)",
+                "width": d.width, "height": d.height,
+                "x": d.frame.origin.x, "y": d.frame.origin.y,
+            ])
+        }
+        let systemApps: Set<String> = [
+            "Dock", "Notification Centre", "Notification Center", "Window Server",
+            "WindowServer", "Control Centre", "Control Center", "Wallpaper",
+        ]
+        for w in content.windows {
+            guard let title = w.title, !title.isEmpty else { continue }
+            guard let app = w.owningApplication?.applicationName, !app.isEmpty else { continue }
+            if w.windowLayer != 0 { continue } // skip menubar / dock / widgets
+            if systemApps.contains(app) { continue }
+            if w.frame.width < 80 || w.frame.height < 80 { continue }
+            windows.append([
+                "id": w.windowID,
+                "app": app,
+                "title": title,
+                "width": w.frame.width, "height": w.frame.height,
+                "x": w.frame.origin.x, "y": w.frame.origin.y,
+            ])
+        }
+    }
+    let obj: [String: Any] = ["displays": displays, "windows": windows]
+    if let data = try? JSONSerialization.data(withJSONObject: obj) {
+        FileHandle.standardOutput.write(data)
+    }
+    exit(0)
+}
+
 let outURL = URL(fileURLWithPath: args[1])
 let wantAudio = args.count > 2 && args[2] == "1"
-// Optional 4th arg: CGDirectDisplayID of the screen to record (default: first).
-let wantDisplayID: CGDirectDisplayID? = args.count > 3 ? UInt32(args[3]) : nil
+// [kind: "display" | "window"] [id]
+let targetKind = args.count > 3 ? args[3] : "display"
+let targetID: UInt32? = args.count > 4 ? UInt32(args[4]) : nil
 
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let writer: AVAssetWriter
@@ -105,34 +165,40 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
-// Shareable content, synchronously.
-var contentResult: SCShareableContent?
-var contentError: Error?
-let contentSem = DispatchSemaphore(value: 0)
-SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-    contentResult = content
-    contentError = error
-    contentSem.signal()
-}
-contentSem.wait()
-guard let content = contentResult else {
+guard let content = fetchShareable() else {
     FileHandle.standardError.write(
-        Data("no content: \(contentError.map(String.init(describing:)) ?? "unknown")\n".utf8))
-    exit(3)
-}
-let selectedDisplay =
-    wantDisplayID.flatMap { id in content.displays.first { $0.displayID == id } }
-    ?? content.displays.first
-guard let display = selectedDisplay else {
-    FileHandle.standardError.write(Data("no display available\n".utf8))
+        Data("no shareable content (grant Screen Recording permission?)\n".utf8))
     exit(3)
 }
 
-let filter = SCContentFilter(display: display, excludingWindows: [])
-let config = SCStreamConfiguration()
+// Build the capture filter for the requested target: a single window, or a
+// whole display (default).
 let scale = 2 // capture at retina density
-config.width = display.width * scale
-config.height = display.height * scale
+let filter: SCContentFilter
+var capW = 0
+var capH = 0
+if targetKind == "window", let id = targetID,
+    let win = content.windows.first(where: { $0.windowID == id }) {
+    filter = SCContentFilter(desktopIndependentWindow: win)
+    capW = Int(win.frame.width) * scale
+    capH = Int(win.frame.height) * scale
+} else {
+    let display =
+        (targetKind == "display"
+            ? targetID.flatMap { id in content.displays.first { $0.displayID == id } }
+            : nil) ?? content.displays.first
+    guard let display = display else {
+        FileHandle.standardError.write(Data("no display available\n".utf8))
+        exit(3)
+    }
+    filter = SCContentFilter(display: display, excludingWindows: [])
+    capW = display.width * scale
+    capH = display.height * scale
+}
+
+let config = SCStreamConfiguration()
+config.width = capW
+config.height = capH
 config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
 config.showsCursor = false // the whole point
 config.pixelFormat = kCVPixelFormatType_32BGRA

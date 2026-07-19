@@ -179,6 +179,47 @@ export function sampleFrame(project: Project, t: number): FrameState {
   if (recording.cursor.length > 0 && style.cursor.style !== 'none') {
     const pos = sampleCursor(recording.cursor, t, style.cursor.smoothing);
     if (pos) {
+      let cx = pos.x;
+      let cy = pos.y;
+
+      // Extra smoothing beyond 1×: a windowed low-pass over the path.
+      if (style.cursor.smoothing > 1) {
+        const extra = Math.min(style.cursor.smoothing - 1, 2);
+        const w = 90 + extra * 170; // half-window, ms
+        let ax = 0;
+        let ay = 0;
+        let n = 0;
+        for (const dt of [-w, -w / 2, 0, w / 2, w]) {
+          const p = sampleCursor(recording.cursor, t + dt, 1);
+          if (p) {
+            ax += p.x;
+            ay += p.y;
+            n++;
+          }
+        }
+        if (n > 0) {
+          const f = Math.min(1, extra);
+          cx = lerp(cx, ax / n, f);
+          cy = lerp(cy, ay / n, f);
+        }
+      }
+
+      // Return to start: ease the cursor back to its opening position over the
+      // tail of the trimmed span, so a looped export has no visible jump.
+      if (style.cursor.returnToStart) {
+        const start = project.trim?.start ?? 0;
+        const end = project.trim?.end ?? recording.duration;
+        const ret = Math.min(700, (end - start) * 0.35);
+        if (ret > 0 && t > end - ret) {
+          const startPos = sampleCursor(recording.cursor, start, style.cursor.smoothing);
+          if (startPos) {
+            const k = smoother((t - (end - ret)) / ret);
+            cx = lerp(cx, startPos.x, k);
+            cy = lerp(cy, startPos.y, k);
+          }
+        }
+      }
+
       let pulse = 0;
       if (style.cursor.clickHighlight) {
         for (let i = recording.clicks.length - 1; i >= 0; i--) {
@@ -190,8 +231,8 @@ export function sampleFrame(project: Project, t: number): FrameState {
       }
       cursor = {
         visible: true,
-        x: pos.x,
-        y: pos.y,
+        x: cx,
+        y: cy,
         clickPulse: pulse,
         hand: pos.hand && style.cursor.handOnHover,
       };

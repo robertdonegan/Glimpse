@@ -245,6 +245,18 @@ button {
   font-size: 12.5px;
 }
 
+/* Compact floating controller (native recording shrinks the window): just the
+   pill, no caption. */
+@media (max-height: 220px) {
+  .recording p {
+    display: none;
+  }
+  .recording-bar {
+    gap: 10px;
+    padding: 8px 12px 8px 16px;
+  }
+}
+
 /* ---------- Editor layout ---------- */
 
 .editor {

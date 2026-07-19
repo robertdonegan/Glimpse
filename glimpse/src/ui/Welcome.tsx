@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useGlimpse } from '../state/store';
-import { isTauri, listDisplays, type DisplayInfo } from '../capture/nativeCapture';
+import {
+  isTauri,
+  listSources,
+  type Sources,
+  type CaptureTarget,
+} from '../capture/nativeCapture';
 
 /** Play triangle — tap to record. */
 function PlayMark() {
@@ -18,19 +23,31 @@ export function Welcome() {
   const openProject = useGlimpse((s) => s.openProject);
   const [error, setError] = useState<string | null>(null);
   const [audio, setAudio] = useState(false);
-  const [displays, setDisplays] = useState<DisplayInfo[]>([]);
-  const [displayId, setDisplayId] = useState<number | undefined>(undefined);
+  const [sources, setSources] = useState<Sources>({ displays: [], windows: [] });
+  const [selected, setSelected] = useState<string>(''); // "display:ID" | "window:ID"
   const native = isTauri();
 
-  // Desktop: enumerate screens so the user can pick which one to record.
+  // Desktop: enumerate screens + windows so the user can pick what to record.
   useEffect(() => {
     if (!native) return;
-    void listDisplays().then((ds) => {
-      setDisplays(ds);
-      const main = ds.find((d) => d.is_main) ?? ds[0];
-      if (main) setDisplayId(main.id);
+    void listSources().then((s) => {
+      setSources(s);
+      const first = s.displays.find((d) => d.is_main) ?? s.displays[0];
+      if (first) setSelected(`display:${first.id}`);
     });
   }, [native]);
+
+  const targetFromSelection = (): CaptureTarget | undefined => {
+    const [kind, idStr] = selected.split(':');
+    const id = Number(idStr);
+    if (kind === 'window') {
+      const w = sources.windows.find((win) => win.id === id);
+      if (w) return { kind: 'window', id, x: w.x, y: w.y, w: w.width, h: w.height };
+    }
+    const d = sources.displays.find((disp) => disp.id === id) ?? sources.displays[0];
+    if (d) return { kind: 'display', id: d.id, x: d.x, y: d.y, w: d.width, h: d.height };
+    return undefined;
+  };
   const supported =
     native ||
     (typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia);
@@ -38,7 +55,7 @@ export function Welcome() {
   const begin = async (preferCurrentTab: boolean) => {
     setError(null);
     try {
-      if (native) await startNativeRecording(audio, displayId);
+      if (native) await startNativeRecording(audio, targetFromSelection());
       else await startRecording(preferCurrentTab, audio);
     } catch (e) {
       // User dismissed the picker — not an error worth shouting about.
@@ -66,27 +83,34 @@ export function Welcome() {
 
         {native ? (
           <div className="capture-options" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-            {displays.length > 1 && (
-              <select
-                className="rate-select"
-                value={displayId ?? ''}
-                onChange={(e) => setDisplayId(Number(e.target.value))}
-                aria-label="Screen to record"
-              >
-                {displays.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
-            )}
+            <select
+              className="rate-select"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              aria-label="What to record"
+            >
+              {sources.displays.length > 0 && (
+                <optgroup label="Screens">
+                  {sources.displays.map((d) => (
+                    <option key={`d${d.id}`} value={`display:${d.id}`}>
+                      {d.label}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {sources.windows.length > 0 && (
+                <optgroup label="App / browser windows">
+                  {sources.windows.map((w) => (
+                    <option key={`w${w.id}`} value={`window:${w.id}`}>
+                      {w.app} — {w.title}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
             <button className="capture-option" onClick={() => begin(true)}>
-              <strong>Record screen</strong>
-              <span>
-                {displays.length > 1
-                  ? 'Native capture — pick the screen above'
-                  : 'Native capture — cursor as data, any app'}
-              </span>
+              <strong>Record selection</strong>
+              <span>Native capture — cursor as data, effects applied after</span>
             </button>
           </div>
         ) : (

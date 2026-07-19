@@ -12,7 +12,7 @@
 //! Permissions (macOS): only Screen Recording (for screencapture), prompted
 //! on first use.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -171,6 +171,51 @@ pub struct DisplayInfo {
     pub y: f64,
     pub is_main: bool,
     pub label: String,
+}
+
+/// A capture target chosen in the UI: a whole display or a single window,
+/// with its bounds (points) for telemetry alignment.
+#[derive(Deserialize, Default)]
+pub struct CaptureTarget {
+    /// "display" or "window".
+    pub kind: String,
+    pub id: u32,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Enumerate displays + windows via the sidecar (falls back to CG displays).
+#[tauri::command]
+pub fn list_sources() -> serde_json::Value {
+    if let Some(sidecar) = sidecar_path() {
+        if let Ok(out) = Command::new(sidecar).arg("--list").output() {
+            if out.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    // If the sidecar couldn't list displays, fall back to CG.
+                    let empty = v
+                        .get("displays")
+                        .and_then(|d| d.as_array())
+                        .map(|a| a.is_empty())
+                        .unwrap_or(true);
+                    if !empty {
+                        return v;
+                    }
+                }
+            }
+        }
+    }
+    let displays: Vec<serde_json::Value> = list_displays()
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "id": d.id, "label": d.label, "width": d.width,
+                "height": d.height, "x": d.x, "y": d.y
+            })
+        })
+        .collect();
+    serde_json::json!({ "displays": displays, "windows": [] })
 }
 
 /// Enumerate connected displays so the UI can offer a picker.
@@ -468,6 +513,8 @@ struct ActiveCapture {
     /// Recorded display's pixel size (points), for telemetry normalisation.
     display_w: f64,
     display_h: f64,
+    /// Sidecar stderr, surfaced if the recording file never appears.
+    stderr_log: Arc<Mutex<String>>,
     stop_flag: Arc<AtomicBool>,
     log: Arc<Mutex<TelemetryLog>>,
     poller: JoinHandle<()>,
@@ -499,23 +546,29 @@ impl Default for CaptureState {
 pub fn start_native_capture(
     state: tauri::State<CaptureState>,
     audio: bool,
-    display_id: Option<u32>,
+    target: Option<CaptureTarget>,
 ) -> Result<(), String> {
     let mut slot = state.0.lock().map_err(|e| e.to_string())?;
     if slot.is_some() {
         return Err("A capture is already running".into());
     }
+    let target = target.unwrap_or_default();
 
-    // Resolve the display to record: the requested one if still connected,
-    // otherwise the main display.
-    let displays = list_active_displays();
-    let chosen = display_id
-        .filter(|d| displays.contains(d))
-        .unwrap_or_else(|| unsafe { CGMainDisplayID() });
-    let (display_w, display_h) = display_size(chosen);
-    let origin = display_origin(chosen);
-    // screencapture -D is 1-based over the active display list.
-    let display_index = displays.iter().position(|&d| d == chosen).map(|p| p + 1).unwrap_or(1);
+    // Telemetry aligns to the target's bounds (points). If unknown (no picker
+    // data), fall back to the main display. The screencapture fallback also
+    // needs a 1-based display index.
+    let (origin, display_w, display_h) = if target.w > 0.0 && target.h > 0.0 {
+        ((target.x, target.y), target.w, target.h)
+    } else {
+        let main = unsafe { CGMainDisplayID() };
+        let (w, h) = display_size(main);
+        (display_origin(main), w, h)
+    };
+    let display_index = list_active_displays()
+        .iter()
+        .position(|&d| d == target.id)
+        .map(|p| p + 1)
+        .unwrap_or(1);
 
     let path = std::env::temp_dir()
         .join(format!(
@@ -531,6 +584,8 @@ pub fn start_native_capture(
     let start = Instant::now();
     let start_unix_ms = unix_ms();
     let first_frame_ms: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+    // Collect the sidecar's stderr so a failure surfaces its real reason.
+    let stderr_log: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     // Preferred: our ScreenCaptureKit sidecar — records with showsCursor=false
     // (truly cursor-free pixels) and reports its first-frame wall clock so
@@ -540,8 +595,10 @@ pub fn start_native_capture(
         let mut cmd = Command::new(sidecar);
         cmd.arg(&path)
             .arg(if audio { "1" } else { "0" })
-            .arg(chosen.to_string())
-            .stdout(std::process::Stdio::piped());
+            .arg(&target.kind)
+            .arg(target.id.to_string())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| {
             format!("Could not start capture sidecar: {e}. Grant Screen Recording permission and retry.")
         })?;
@@ -560,11 +617,28 @@ pub fn start_native_capture(
                 }
             });
         }
+        if let Some(stderr) = child.stderr.take() {
+            let log = stderr_log.clone();
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = String::new();
+                let mut r = stderr;
+                let _ = r.read_to_string(&mut buf);
+                if let Ok(mut g) = log.lock() {
+                    g.push_str(&buf);
+                }
+            });
+        }
         child
     } else {
         // -v video, -x no UI sounds, -g include default audio input.
         let mut cmd = Command::new("screencapture");
-        cmd.arg("-v").arg("-x").arg(format!("-D{display_index}"));
+        cmd.arg("-v").arg("-x");
+        if target.kind == "window" {
+            cmd.arg(format!("-l{}", target.id));
+        } else {
+            cmd.arg(format!("-D{display_index}"));
+        }
         if audio {
             cmd.arg("-g");
         }
@@ -592,6 +666,7 @@ pub fn start_native_capture(
         has_audio: audio,
         display_w,
         display_h,
+        stderr_log,
         stop_flag,
         log,
         poller,
@@ -660,11 +735,20 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
     let (screen_w, screen_h) = (active.display_w, active.display_h);
 
     if !std::path::Path::new(&active.path).exists() {
-        return Err(
-            "Recording file was not written. Grant Screen Recording permission in \
+        let details = active
+            .stderr_log
+            .lock()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let prefix = if details.is_empty() {
+            String::new()
+        } else {
+            format!("Capture error: {details}. ")
+        };
+        return Err(format!(
+            "{prefix}Recording file was not written. Grant Screen Recording permission in \
              System Settings → Privacy & Security → Screen Recording, then restart Glimpse."
-                .into(),
-        );
+        ));
     }
 
     Ok(CaptureResult {
