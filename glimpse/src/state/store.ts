@@ -53,7 +53,7 @@ interface GlimpseState {
     keepScreen?: boolean,
   ) => Promise<void>;
   /** Desktop app only: cursor-free native screen capture + global telemetry. */
-  startNativeRecording: (withAudio: boolean) => Promise<void>;
+  startNativeRecording: (withAudio: boolean, displayId?: number) => Promise<void>;
   stopRecording: () => Promise<void>;
   enterFrame: () => void;
   exitFrame: () => void;
@@ -221,8 +221,8 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     if (!get().active) set({ screen: 'welcome' });
   },
 
-  startNativeRecording: async (withAudio) => {
-    const active = await beginNativeRecording({ audio: withAudio });
+  startNativeRecording: async (withAudio, displayId) => {
+    const active = await beginNativeRecording({ audio: withAudio, displayId });
     set({ active, screen: 'recording' });
   },
 
