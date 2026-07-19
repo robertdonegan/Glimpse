@@ -64,6 +64,20 @@ struct CGPoint {
     y: f64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventCreate(source: *const std::ffi::c_void) -> *const std::ffi::c_void;
@@ -76,6 +90,9 @@ extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CGRect;
+    fn CGDisplayIsMain(display: u32) -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -124,14 +141,65 @@ const KEYS: [(u16, &str); 57] = [
     (41, ";"), (39, "'"), (50, "`"), (42, "\\"),
 ];
 
-fn main_display_size() -> (f64, f64) {
+fn list_active_displays() -> Vec<u32> {
     unsafe {
-        let id = CGMainDisplayID();
-        (
-            CGDisplayPixelsWide(id) as f64,
-            CGDisplayPixelsHigh(id) as f64,
-        )
+        let mut ids = [0u32; 16];
+        let mut count: u32 = 0;
+        if CGGetActiveDisplayList(16, ids.as_mut_ptr(), &mut count) != 0 {
+            return vec![];
+        }
+        ids[..count as usize].to_vec()
     }
+}
+
+fn display_size(id: u32) -> (f64, f64) {
+    unsafe { (CGDisplayPixelsWide(id) as f64, CGDisplayPixelsHigh(id) as f64) }
+}
+
+fn display_origin(id: u32) -> (f64, f64) {
+    let b = unsafe { CGDisplayBounds(id) };
+    (b.origin.x, b.origin.y)
+}
+
+#[derive(Serialize)]
+pub struct DisplayInfo {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Top-left origin in the global display space (points).
+    pub x: f64,
+    pub y: f64,
+    pub is_main: bool,
+    pub label: String,
+}
+
+/// Enumerate connected displays so the UI can offer a picker.
+#[tauri::command]
+pub fn list_displays() -> Vec<DisplayInfo> {
+    list_active_displays()
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let (w, h) = display_size(id);
+            let (x, y) = display_origin(id);
+            let is_main = unsafe { CGDisplayIsMain(id) };
+            DisplayInfo {
+                id,
+                width: w as u32,
+                height: h as u32,
+                x,
+                y,
+                is_main,
+                label: format!(
+                    "Display {}{} — {}×{}",
+                    i + 1,
+                    if is_main { " (main)" } else { "" },
+                    w as u32,
+                    h as u32
+                ),
+            }
+        })
+        .collect()
 }
 
 /* ---------- Accessibility: hover-hand detection ----------
@@ -308,6 +376,8 @@ fn spawn_poller(
     log: Arc<Mutex<TelemetryLog>>,
     t0: Instant,
     ax_enabled: bool,
+    // Chosen display's top-left origin (points) — cursor is stored relative to it.
+    origin: (f64, f64),
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let probe = if ax_enabled { Some(AxProbe::new()) } else { None };
@@ -329,17 +399,21 @@ fn spawn_poller(
                     Ok(l) => l,
                     Err(_) => break,
                 };
+                // Store coordinates relative to the recorded display's origin
+                // (AX hover-detection above still uses the global position).
+                let lx = x - origin.0;
+                let ly = y - origin.1;
                 if (x, y) != last_pos {
                     last_pos = (x, y);
-                    l.cursor.push(Sample { t, x, y, hand });
+                    l.cursor.push(Sample { t, x: lx, y: ly, hand });
                 }
                 for (i, (cg, js)) in BUTTONS.iter().enumerate() {
                     let down = button_state(*cg);
                     if down && !was_down[i] {
                         l.clicks.push(Click {
                             t,
-                            x,
-                            y,
+                            x: lx,
+                            y: ly,
                             button: *js,
                         });
                     }
@@ -391,6 +465,9 @@ struct ActiveCapture {
     first_frame_ms: Arc<Mutex<Option<u64>>>,
     path: String,
     has_audio: bool,
+    /// Recorded display's pixel size (points), for telemetry normalisation.
+    display_w: f64,
+    display_h: f64,
     stop_flag: Arc<AtomicBool>,
     log: Arc<Mutex<TelemetryLog>>,
     poller: JoinHandle<()>,
@@ -422,11 +499,23 @@ impl Default for CaptureState {
 pub fn start_native_capture(
     state: tauri::State<CaptureState>,
     audio: bool,
+    display_id: Option<u32>,
 ) -> Result<(), String> {
     let mut slot = state.0.lock().map_err(|e| e.to_string())?;
     if slot.is_some() {
         return Err("A capture is already running".into());
     }
+
+    // Resolve the display to record: the requested one if still connected,
+    // otherwise the main display.
+    let displays = list_active_displays();
+    let chosen = display_id
+        .filter(|d| displays.contains(d))
+        .unwrap_or_else(|| unsafe { CGMainDisplayID() });
+    let (display_w, display_h) = display_size(chosen);
+    let origin = display_origin(chosen);
+    // screencapture -D is 1-based over the active display list.
+    let display_index = displays.iter().position(|&d| d == chosen).map(|p| p + 1).unwrap_or(1);
 
     let path = std::env::temp_dir()
         .join(format!(
@@ -451,6 +540,7 @@ pub fn start_native_capture(
         let mut cmd = Command::new(sidecar);
         cmd.arg(&path)
             .arg(if audio { "1" } else { "0" })
+            .arg(chosen.to_string())
             .stdout(std::process::Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| {
             format!("Could not start capture sidecar: {e}. Grant Screen Recording permission and retry.")
@@ -474,7 +564,7 @@ pub fn start_native_capture(
     } else {
         // -v video, -x no UI sounds, -g include default audio input.
         let mut cmd = Command::new("screencapture");
-        cmd.arg("-v").arg("-x");
+        cmd.arg("-v").arg("-x").arg(format!("-D{display_index}"));
         if audio {
             cmd.arg("-g");
         }
@@ -491,7 +581,7 @@ pub fn start_native_capture(
     // Prompts for Accessibility on first use; hand detection degrades
     // gracefully to "always arrow" if declined.
     let ax_enabled = ax_trusted_with_prompt();
-    let poller = spawn_poller(stop_flag.clone(), log.clone(), start, ax_enabled);
+    let poller = spawn_poller(stop_flag.clone(), log.clone(), start, ax_enabled, origin);
 
     *slot = Some(ActiveCapture {
         child,
@@ -500,6 +590,8 @@ pub fn start_native_capture(
         first_frame_ms,
         path,
         has_audio: audio,
+        display_w,
+        display_h,
         stop_flag,
         log,
         poller,
@@ -565,7 +657,7 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         .collect();
 
     let duration_ms = (active.start.elapsed().as_secs_f64() * 1000.0 - shift_ms).max(1.0);
-    let (screen_w, screen_h) = main_display_size();
+    let (screen_w, screen_h) = (active.display_w, active.display_h);
 
     if !std::path::Path::new(&active.path).exists() {
         return Err(

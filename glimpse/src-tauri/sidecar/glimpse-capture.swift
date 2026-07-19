@@ -22,6 +22,8 @@ guard args.count >= 2 else {
 }
 let outURL = URL(fileURLWithPath: args[1])
 let wantAudio = args.count > 2 && args[2] == "1"
+// Optional 4th arg: CGDirectDisplayID of the screen to record (default: first).
+let wantDisplayID: CGDirectDisplayID? = args.count > 3 ? UInt32(args[3]) : nil
 
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let writer: AVAssetWriter
@@ -113,9 +115,16 @@ SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) 
     contentSem.signal()
 }
 contentSem.wait()
-guard let content = contentResult, let display = content.displays.first else {
+guard let content = contentResult else {
     FileHandle.standardError.write(
-        Data("no display: \(contentError.map(String.init(describing:)) ?? "unknown")\n".utf8))
+        Data("no content: \(contentError.map(String.init(describing:)) ?? "unknown")\n".utf8))
+    exit(3)
+}
+let selectedDisplay =
+    wantDisplayID.flatMap { id in content.displays.first { $0.displayID == id } }
+    ?? content.displays.first
+guard let display = selectedDisplay else {
+    FileHandle.standardError.write(Data("no display available\n".utf8))
     exit(3)
 }
 

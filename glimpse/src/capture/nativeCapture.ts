@@ -31,10 +31,34 @@ interface NativeCaptureResult {
   has_audio: boolean;
 }
 
+export interface DisplayInfo {
+  id: number;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  is_main: boolean;
+  label: string;
+}
+
+/** Connected displays, for the record-screen picker. Empty off-desktop. */
+export async function listDisplays(): Promise<DisplayInfo[]> {
+  if (!isTauri()) return [];
+  try {
+    return await invoke<DisplayInfo[]>('list_displays');
+  } catch {
+    return [];
+  }
+}
+
 export async function beginNativeRecording(opts: {
   audio?: boolean;
+  displayId?: number;
 }): Promise<ActiveRecording> {
-  await invoke('start_native_capture', { audio: opts.audio ?? false });
+  await invoke('start_native_capture', {
+    audio: opts.audio ?? false,
+    displayId: opts.displayId ?? null,
+  });
 
   const stop = async (): Promise<Recording> => {
     const res = await invoke<NativeCaptureResult>('stop_native_capture');
