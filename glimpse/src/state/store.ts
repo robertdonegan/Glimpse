@@ -10,7 +10,7 @@ import type {
 import { createProject, makeId } from '../timeline/model';
 import { generateAutoZooms } from '../timeline/autoZoom';
 import { beginRecording, type ActiveRecording } from '../capture/recorder';
-import { beginNativeRecording } from '../capture/nativeCapture';
+import { beginNativeRecording, type CaptureTarget } from '../capture/nativeCapture';
 import {
   exportProject,
   exportGif,
@@ -52,8 +52,8 @@ interface GlimpseState {
     withAudio: boolean,
     keepScreen?: boolean,
   ) => Promise<void>;
-  /** Desktop app only: cursor-free native screen capture + global telemetry. */
-  startNativeRecording: (withAudio: boolean, displayId?: number) => Promise<void>;
+  /** Desktop app only: cursor-free native screen/window capture + telemetry. */
+  startNativeRecording: (withAudio: boolean, target?: CaptureTarget) => Promise<void>;
   stopRecording: () => Promise<void>;
   enterFrame: () => void;
   exitFrame: () => void;
@@ -221,8 +221,8 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     if (!get().active) set({ screen: 'welcome' });
   },
 
-  startNativeRecording: async (withAudio, displayId) => {
-    const active = await beginNativeRecording({ audio: withAudio, displayId });
+  startNativeRecording: async (withAudio, target) => {
+    const active = await beginNativeRecording({ audio: withAudio, target });
     set({ active, screen: 'recording' });
   },
 

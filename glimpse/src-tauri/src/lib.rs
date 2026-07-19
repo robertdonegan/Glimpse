@@ -7,6 +7,7 @@ pub fn run() {
         .manage(capture::CaptureState::default())
         .invoke_handler(tauri::generate_handler![
             capture::list_displays,
+            capture::list_sources,
             capture::start_native_capture,
             capture::stop_native_capture,
             capture::read_recording,

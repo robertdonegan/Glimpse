@@ -41,23 +41,48 @@ export interface DisplayInfo {
   label: string;
 }
 
-/** Connected displays, for the record-screen picker. Empty off-desktop. */
-export async function listDisplays(): Promise<DisplayInfo[]> {
-  if (!isTauri()) return [];
+export interface WindowInfo {
+  id: number;
+  app: string;
+  title: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
+export interface Sources {
+  displays: DisplayInfo[];
+  windows: WindowInfo[];
+}
+
+/** What to record: a whole display, or a single window, with its bounds. */
+export interface CaptureTarget {
+  kind: 'display' | 'window';
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Displays + open windows to record. Empty off-desktop. */
+export async function listSources(): Promise<Sources> {
+  if (!isTauri()) return { displays: [], windows: [] };
   try {
-    return await invoke<DisplayInfo[]>('list_displays');
+    return await invoke<Sources>('list_sources');
   } catch {
-    return [];
+    return { displays: [], windows: [] };
   }
 }
 
 export async function beginNativeRecording(opts: {
   audio?: boolean;
-  displayId?: number;
+  target?: CaptureTarget;
 }): Promise<ActiveRecording> {
   await invoke('start_native_capture', {
     audio: opts.audio ?? false,
-    displayId: opts.displayId ?? null,
+    target: opts.target ?? null,
   });
 
   const stop = async (): Promise<Recording> => {
