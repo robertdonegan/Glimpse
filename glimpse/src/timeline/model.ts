@@ -109,6 +109,8 @@ export interface StyleSettings {
     handOnHover: boolean;
     /** Brand colour for the cursor body (outline auto-contrasts). */
     color: string;
+    /** Ease the cursor back to its start position at the end — seamless loops. */
+    returnToStart: boolean;
   };
   /** Static 3D pose for hero shots, degrees. */
   pose: { rotX: number; rotY: number; rotZ: number };
@@ -225,6 +227,7 @@ export const DEFAULT_STYLE: StyleSettings = {
     clickHighlight: true,
     handOnHover: true,
     color: '#111111',
+    returnToStart: false,
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
