@@ -513,6 +513,8 @@ struct ActiveCapture {
     /// Recorded display's pixel size (points), for telemetry normalisation.
     display_w: f64,
     display_h: f64,
+    /// Sidecar stderr, surfaced if the recording file never appears.
+    stderr_log: Arc<Mutex<String>>,
     stop_flag: Arc<AtomicBool>,
     log: Arc<Mutex<TelemetryLog>>,
     poller: JoinHandle<()>,
@@ -582,6 +584,8 @@ pub fn start_native_capture(
     let start = Instant::now();
     let start_unix_ms = unix_ms();
     let first_frame_ms: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+    // Collect the sidecar's stderr so a failure surfaces its real reason.
+    let stderr_log: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     // Preferred: our ScreenCaptureKit sidecar — records with showsCursor=false
     // (truly cursor-free pixels) and reports its first-frame wall clock so
@@ -593,7 +597,8 @@ pub fn start_native_capture(
             .arg(if audio { "1" } else { "0" })
             .arg(&target.kind)
             .arg(target.id.to_string())
-            .stdout(std::process::Stdio::piped());
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| {
             format!("Could not start capture sidecar: {e}. Grant Screen Recording permission and retry.")
         })?;
@@ -609,6 +614,18 @@ pub fn start_native_capture(
                             }
                         }
                     }
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let log = stderr_log.clone();
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = String::new();
+                let mut r = stderr;
+                let _ = r.read_to_string(&mut buf);
+                if let Ok(mut g) = log.lock() {
+                    g.push_str(&buf);
                 }
             });
         }
@@ -649,6 +666,7 @@ pub fn start_native_capture(
         has_audio: audio,
         display_w,
         display_h,
+        stderr_log,
         stop_flag,
         log,
         poller,
@@ -717,11 +735,20 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
     let (screen_w, screen_h) = (active.display_w, active.display_h);
 
     if !std::path::Path::new(&active.path).exists() {
-        return Err(
-            "Recording file was not written. Grant Screen Recording permission in \
+        let details = active
+            .stderr_log
+            .lock()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let prefix = if details.is_empty() {
+            String::new()
+        } else {
+            format!("Capture error: {details}. ")
+        };
+        return Err(format!(
+            "{prefix}Recording file was not written. Grant Screen Recording permission in \
              System Settings → Privacy & Security → Screen Recording, then restart Glimpse."
-                .into(),
-        );
+        ));
     }
 
     Ok(CaptureResult {
