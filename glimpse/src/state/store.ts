@@ -30,6 +30,9 @@ interface GlimpseState {
   /** File handle (browser) or path (desktop) for quick "Save" once the project
    * has a home on disk. */
   fileHandle: ProjectHandle | null;
+  /** True when the project has edits not yet written to disk — drives the
+   * unsaved asterisk beside the project name. */
+  dirty: boolean;
 
   // Playback
   playhead: number; // ms
@@ -171,7 +174,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     const coalesce = now - lastCommit < COALESCE_MS && get().past.length > 0;
     lastCommit = now;
     const past = coalesce ? get().past : [...get().past, cur].slice(-HISTORY_LIMIT);
-    set({ project: next, past, future: [] });
+    set({ project: next, past, future: [], dirty: true });
   };
 
   return {
@@ -179,6 +182,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
   project: null,
   active: null,
   fileHandle: null,
+  dirty: false,
   playhead: 0,
   playing: false,
   loop: false,
@@ -196,6 +200,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       project: past[past.length - 1],
       past: past.slice(0, -1),
       future: [project, ...future].slice(0, HISTORY_LIMIT),
+      dirty: true,
     });
   },
 
@@ -207,6 +212,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       project: future[0],
       future: future.slice(1),
       past: [...past, project].slice(-HISTORY_LIMIT),
+      dirty: true,
     });
   },
 
@@ -274,6 +280,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       playhead: 0,
       playing: false,
       fileHandle: null,
+      dirty: true, // fresh recording — nothing on disk yet
       past: [],
       future: [],
     });
@@ -286,6 +293,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       playhead: 0,
       playing: false,
       fileHandle: null,
+      dirty: false,
       past: [],
       future: [],
     }),
@@ -295,7 +303,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     if (!project) return;
     try {
       const handle = await saveProjectFile(project, fileHandle, as);
-      if (handle) set({ fileHandle: handle });
+      if (handle) set({ fileHandle: handle, dirty: false });
     } catch (e) {
       if ((e as DOMException)?.name === 'AbortError') return; // picker dismissed
       throw e;
@@ -311,6 +319,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
         screen: 'editor',
         playhead: 0,
         playing: false,
+        dirty: false,
         past: [],
         future: [],
       });

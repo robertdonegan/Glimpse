@@ -3,7 +3,8 @@ import { useGlimpse } from '../state/store';
 import { Preview } from './Preview';
 import { Timeline } from './Timeline';
 import { Inspector } from './Inspector';
-import { ThemeToggle } from './ThemeToggle';
+import { Icon, LogoMark } from './Icon';
+import { toggleTheme } from './ThemeToggle';
 
 export function Editor() {
   const discardProject = useGlimpse((s) => s.discardProject);
@@ -11,6 +12,7 @@ export function Editor() {
   const openProject = useGlimpse((s) => s.openProject);
   const setProjectName = useGlimpse((s) => s.setProjectName);
   const project = useGlimpse((s) => s.project);
+  const dirty = useGlimpse((s) => s.dirty);
   const undo = useGlimpse((s) => s.undo);
   const redo = useGlimpse((s) => s.redo);
   const canUndo = useGlimpse((s) => s.past.length > 0);
@@ -69,52 +71,66 @@ export function Editor() {
     <div className="editor">
       <header className="topbar">
         <div className="topbar-left">
-          <span className="wordmark">Glimpse</span>
+          {/* Placeholder logo — clicking it swaps light/dark mode. */}
+          <button
+            className="logo-btn"
+            onClick={toggleTheme}
+            title="Toggle light / dark mode"
+            aria-label="Toggle colour theme"
+          >
+            <LogoMark size={32} />
+          </button>
           <input
             className="project-name"
             value={project.name}
             onChange={(e) => setProjectName(e.target.value)}
             aria-label="Project name"
             spellCheck={false}
+            style={{ width: `${Math.max(8, project.name.length + 1)}ch` }}
           />
+          {dirty && (
+            <span className="dirty-star" title="Unsaved changes">
+              *
+            </span>
+          )}
         </div>
         <div className="topbar-actions">
-          <span className="timecode">
-            {project.recording.cursor.length > 0
-              ? 'Cursor as data'
-              : 'Cursor baked in'}
-          </span>
-          <button
-            className="btn quiet"
-            onClick={undo}
-            disabled={!canUndo}
-            title="Undo (⌘Z)"
-            aria-label="Undo"
-          >
-            ↶
-          </button>
-          <button
-            className="btn quiet"
-            onClick={redo}
-            disabled={!canRedo}
-            title="Redo (⇧⌘Z)"
-            aria-label="Redo"
-          >
-            ↷
-          </button>
+          <div className="undo-redo">
+            <button
+              className="btn quiet icon-btn"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (⌘Z)"
+              aria-label="Undo"
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              className="btn quiet icon-btn"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (⇧⌘Z)"
+              aria-label="Redo"
+            >
+              <Icon name="redo" />
+            </button>
+          </div>
           <button className="btn quiet" onClick={confirmNew}>
-            New
+            <Icon name="plus" />
+            New recording
           </button>
           <button className="btn quiet" onClick={() => void openProject()}>
+            <Icon name="open" />
             Open
           </button>
-          <button className="btn" onClick={() => void saveProject(false)}>
+          <button className="btn primary" onClick={() => void saveProject(false)}>
+            <Icon name="save" />
             Save
           </button>
           <button className="btn quiet" onClick={() => void saveProject(true)}>
+            <Icon name="save-as" />
             Save as…
           </button>
-          <ThemeToggle />
         </div>
       </header>
       <Preview selectedZoom={selectedZoom} />
