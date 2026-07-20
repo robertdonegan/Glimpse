@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
 import { buildTimeline, outputDuration } from '../timeline/sampler';
+import { Icon } from './Icon';
 
 /** Peak data per blob, computed once. */
 const peaksCache = new WeakMap<Blob, Float32Array>();
@@ -87,7 +88,6 @@ export function Timeline({
   const addZoomAt = useGlimpse((s) => s.addZoomAt);
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const applyAutoZoom = useGlimpse((s) => s.applyAutoZoom);
-  const addMusic = useGlimpse((s) => s.addMusic);
   const updateMusic = useGlimpse((s) => s.updateMusic);
   const removeMusic = useGlimpse((s) => s.removeMusic);
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
@@ -95,7 +95,6 @@ export function Timeline({
   const setPreviewRate = useGlimpse((s) => s.setPreviewRate);
 
   const trackRef = useRef<HTMLDivElement>(null);
-  const musicInput = useRef<HTMLInputElement>(null);
   const [cutDrag, setCutDrag] = useState<{ start: number; end: number } | null>(null);
 
   if (!project) return null;
@@ -142,7 +141,7 @@ export function Timeline({
   const onTrackPointerDown = (e: React.PointerEvent) => {
     if (
       (e.target as HTMLElement).closest(
-        '.zoom-seg, .trim-handle, .playhead-grip, .cut-block',
+        '.zoom-seg, .clip-handle, .playhead-grip, .cut-block',
       )
     )
       return;
@@ -259,113 +258,89 @@ export function Timeline({
 
   return (
     <div className="timeline">
-      <div className="timeline-head">
-        <div className="timecode">
-          <strong>{tc(playhead)}</strong> / {tc(duration)}
-          {Math.abs(outDuration - duration) > 1 && (
-            <span title="Output duration after trim, cuts & clip speeds">
-              {' '}
-              → {tc(outDuration)}
-            </span>
-          )}
+      <div className="timeline-controls">
+        <div className="tc-left">
+          <span className="timecode">
+            <strong>{tc(playhead)}</strong> / {tc(duration)}
+            {Math.abs(outDuration - duration) > 1 && (
+              <span title="Output duration after trim, cuts & clip speeds">
+                {' '}
+                → {tc(outDuration)}
+              </span>
+            )}
+          </span>
           <span className="cut-hint" title="Hold Shift and drag across the timeline to cut a section out">
-            ⇧-drag to cut
+            Shift+drag to cut
           </span>
         </div>
-        <div className="timeline-actions">
-          <div className="transport" role="group" aria-label="Transport">
-            <button className="btn" onClick={() => jump(0)} title="Go to start" aria-label="Go to start">
-              ⏮
-            </button>
-            <button
-              className="btn"
-              onClick={() => jump(playhead - frameMs)}
-              title="Previous frame"
-              aria-label="Previous frame"
-            >
-              ◀︎
-            </button>
-            <button
-              className="btn"
-              onClick={togglePlay}
-              title={playing ? 'Pause (space)' : 'Play (space)'}
-              aria-label={playing ? 'Pause' : 'Play'}
-            >
-              {playing ? '⏸' : '▶'}
-            </button>
-            <button
-              className="btn"
-              onClick={() => jump(playhead + frameMs)}
-              title="Next frame"
-              aria-label="Next frame"
-            >
-              ▶︎
-            </button>
-            <button
-              className="btn"
-              onClick={() => jump(duration)}
-              title="Go to end"
-              aria-label="Go to end"
-            >
-              ⏭
-            </button>
-            <button
-              className={`btn${loop ? ' on' : ''}`}
-              onClick={toggleLoop}
-              title="Loop playback"
-              aria-label="Loop playback"
-              aria-pressed={loop}
-            >
-              ⟳
-            </button>
-          </div>
-          <button
-            className="btn"
-            onClick={() => setTrim({ start: playhead })}
-            title="Set the in-point at the playhead — export starts here"
-          >
-            ⌐ In
+        <div className="transport" role="group" aria-label="Transport">
+          <button className="btn" onClick={() => jump(0)} title="Go to start" aria-label="Go to start">
+            <Icon name="skip-start" />
           </button>
           <button
             className="btn"
-            onClick={() => setTrim({ end: playhead })}
-            title="Set the out-point at the playhead — export ends here"
+            onClick={() => jump(playhead - frameMs)}
+            title="Previous frame"
+            aria-label="Previous frame"
           >
-            Out ¬
+            <Icon name="prev-frame" />
           </button>
-          <button className="btn" onClick={() => addZoomAt(playhead)}>
+          <button
+            className="btn"
+            onClick={togglePlay}
+            title={playing ? 'Pause (space)' : 'Play (space)'}
+            aria-label={playing ? 'Pause' : 'Play'}
+          >
+            {playing ? (
+              <span className="pause-mark" aria-hidden="true" />
+            ) : (
+              <Icon name="play" />
+            )}
+          </button>
+          <button
+            className="btn"
+            onClick={() => jump(playhead + frameMs)}
+            title="Next frame"
+            aria-label="Next frame"
+          >
+            <Icon name="next-frame" className="flip-x" />
+          </button>
+          <button
+            className="btn"
+            onClick={() => jump(duration)}
+            title="Go to end"
+            aria-label="Go to end"
+          >
+            <Icon name="skip-end" className="rot-180" />
+          </button>
+          <button
+            className={`btn${loop ? ' on' : ''}`}
+            onClick={toggleLoop}
+            title="Loop playback"
+            aria-label="Loop playback"
+            aria-pressed={loop}
+          >
+            <Icon name="loop" />
+          </button>
+        </div>
+        <div className="tc-right">
+          <button className="btn quiet" onClick={() => addZoomAt(playhead)}>
+            <Icon name="add-zoom" />
             Add zoom
           </button>
           <button
-            className="btn"
+            className="btn quiet"
             onClick={applyAutoZoom}
             disabled={!hasClicks}
             title={hasClicks ? 'Regenerate zooms from your clicks' : 'Needs a tab recording with clicks'}
           >
             Auto-zoom
           </button>
-          <button
-            className="btn"
-            onClick={() => musicInput.current?.click()}
-            title="Import a music or voice-over file onto the audio track"
-          >
-            {project.music ? 'Replace audio' : 'Add audio'}
-          </button>
-          <input
-            ref={musicInput}
-            type="file"
-            accept="audio/*"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void addMusic(f);
-              e.target.value = '';
-            }}
-          />
           <label
             className="rate-slider"
             title="Preview playback speed (slow viewing only — export is unaffected)"
           >
+            Playback speed
             <input
               type="range"
               min={0.1}
@@ -375,7 +350,7 @@ export function Timeline({
               onChange={(e) => setPreviewRate(Number(e.target.value))}
               aria-label="Preview playback speed"
             />
-            <span>{previewRate.toFixed(2)}×</span>
+            <span className="value">{previewRate.toFixed(2)}×</span>
           </label>
         </div>
       </div>
@@ -400,14 +375,14 @@ export function Timeline({
             }}
             onPointerDown={(e) => onSegPointerDown(e, z.id, 'body')}
           >
+            <span className="seg-label">
+              {z.scale.toFixed(1)}×{(z.speed || 1) !== 1 ? ` · ${z.speed}×spd` : ''}
+            </span>
             <span
               className="seg-handle left"
               onPointerDown={(e) => onSegPointerDown(e, z.id, 'start')}
               aria-hidden="true"
             />
-            <span className="seg-label">
-              {z.scale.toFixed(1)}×{(z.speed || 1) !== 1 ? ` · ${z.speed}×spd` : ''}
-            </span>
             <span
               className="seg-handle right"
               onPointerDown={(e) => onSegPointerDown(e, z.id, 'end')}
@@ -427,14 +402,15 @@ export function Timeline({
             width: `${((duration - project.trim.end) / duration) * 100}%`,
           }}
         />
+        {/* Recording clip handles — drag to trim the clip in/out points. */}
         <div
-          className="trim-handle"
+          className="clip-handle left"
           style={{ left: `${(project.trim.start / duration) * 100}%` }}
           onPointerDown={(e) => onTrimPointerDown(e, 'start')}
           title="Drag the in-point"
         />
         <div
-          className="trim-handle right"
+          className="clip-handle right"
           style={{ left: `${(project.trim.end / duration) * 100}%` }}
           onPointerDown={(e) => onTrimPointerDown(e, 'end')}
           title="Drag the out-point"
@@ -455,7 +431,7 @@ export function Timeline({
               onClick={() => removeCut(i)}
               aria-label="Restore cut"
             >
-              ×
+              <Icon name="cancel-circle" />
             </button>
           </div>
         ))}

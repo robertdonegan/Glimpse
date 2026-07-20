@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
+import { Icon } from './Icon';
 import type { CursorStyle } from '../timeline/model';
 import { audioExportable } from '../export/exporter';
 import { clamp } from '../timeline/easing';
@@ -124,6 +125,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const addOverlay = useGlimpse((s) => s.addOverlay);
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
+  const addMusic = useGlimpse((s) => s.addMusic);
   const runExport = useGlimpse((s) => s.runExport);
   const runExportGif = useGlimpse((s) => s.runExportGif);
   const cancelExport = useGlimpse((s) => s.cancelExport);
@@ -134,6 +136,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const [poseTemplates, setPoseTemplates] = useState<Record<string, Pose>>(loadPoseTemplates);
   const backdropInput = useRef<HTMLInputElement>(null);
   const overlayInput = useRef<HTMLInputElement>(null);
+  const musicInput = useRef<HTMLInputElement>(null);
 
   if (!project) return null;
   const { style, recording } = project;
@@ -186,12 +189,16 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
 
   return (
     <aside className="inspector">
-      <div className="section">
-        <h3>Cursor</h3>
+      <div className="inspector-scroll">
+      <details className="section" open>
+        <summary>
+          Cursor <Icon name="chevron-down" size={12} />
+        </summary>
         {hasCursorData ? (
           <>
             <div className="row">
               <label>Style</label>
+              <span className="select-wrap">
               <select
                 value={style.cursor.style}
                 onChange={(e) =>
@@ -205,6 +212,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
                 <option value="circle">Circle</option>
                 <option value="none">Hidden</option>
               </select>
+              </span>
             </div>
             <SliderRow
               label="Size"
@@ -275,10 +283,12 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             into its pixels.
           </p>
         )}
-      </div>
+      </details>
 
-      <div className="section">
-        <h3>Frame</h3>
+      <details className="section" open>
+        <summary>
+          Frame <Icon name="chevron-down" size={12} />
+        </summary>
         <SliderRow
           label="Padding"
           value={style.padding}
@@ -308,6 +318,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         </div>
         <div className="row">
           <label>Backdrop</label>
+          <span className="select-wrap">
           <select
             value={style.background.kind === 'image' ? 'gradient' : style.background.kind}
             onChange={(e) =>
@@ -322,6 +333,7 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             <option value="corners">4-corner gradient</option>
             <option value="solid">Solid</option>
           </select>
+          </span>
         </div>
         <div className="row" style={{ alignItems: 'flex-start' }}>
           <label>Presets</label>
@@ -431,10 +443,12 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             onChange={(e) => onBackdropFile(e.target.files?.[0])}
           />
         </div>
-      </div>
+      </details>
 
-      <div className="section">
-        <h3>Effects</h3>
+      <details className="section" open>
+        <summary>
+          Effects <Icon name="chevron-down" size={12} />
+        </summary>
         <div className="row">
           <label>Depth of field</label>
           <input
@@ -646,10 +660,12 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             />
           </div>
         ))}
-      </div>
+      </details>
 
-      <div className="section">
-        <h3>3D pose</h3>
+      <details className="section" open>
+        <summary>
+          3D pose <Icon name="chevron-down" size={12} />
+        </summary>
         <div className="seg-row" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
           {Object.entries(POSE_PRESETS).map(([name, pose]) => (
             <button
@@ -709,11 +725,13 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <button className="btn quiet" onClick={savePoseTemplate}>
           Save pose as template
         </button>
-      </div>
+      </details>
 
       {zoom && (
-        <div className="section">
-          <h3>Selected zoom</h3>
+        <details className="section" open>
+          <summary>
+            Selected zoom <Icon name="chevron-down" size={12} />
+          </summary>
           <SliderRow
             label="Scale"
             value={zoom.scale}
@@ -818,31 +836,57 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           <button className="btn quiet" onClick={() => removeZoom(zoom.id)}>
             Remove zoom
           </button>
-        </div>
+        </details>
       )}
 
-      {project.music && (
-        <div className="section">
-          <h3>Audio track</h3>
-          <p className="hint" style={{ margin: '0 0 8px' }}>
-            {project.music.name}
-          </p>
-          <SliderRow
-            label="Volume"
-            value={project.music.gain}
-            min={0}
-            max={1}
-            step={0.05}
-            format={(v) => `${Math.round(v * 100)}%`}
-            parse={(n) => n / 100}
-            onChange={(v) => useGlimpse.getState().updateMusic({ gain: v })}
-          />
-          <p className="hint">Drag the blue clip on the timeline to re-time it.</p>
-        </div>
-      )}
+      <details className="section" open>
+        <summary>
+          Audio track <Icon name="chevron-down" size={12} />
+        </summary>
+        <button
+          className="btn"
+          style={{ width: '100%' }}
+          onClick={() => musicInput.current?.click()}
+          title="Import a music or voice-over file onto the audio track"
+        >
+          <Icon name="audio" />
+          {project.music ? 'Replace audio' : 'Add audio'}
+        </button>
+        <input
+          ref={musicInput}
+          type="file"
+          accept="audio/*"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void addMusic(f);
+            e.target.value = '';
+          }}
+        />
+        {project.music && (
+          <>
+            <p className="hint" style={{ margin: '8px 0' }}>
+              {project.music.name}
+            </p>
+            <SliderRow
+              label="Volume"
+              value={project.music.gain}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => useGlimpse.getState().updateMusic({ gain: v })}
+            />
+            <p className="hint">Drag the green clip on the timeline to re-time it.</p>
+          </>
+        )}
+      </details>
 
-      <div className="section">
-        <h3>Overlays &amp; idents</h3>
+      <details className="section" open>
+        <summary>
+          Overlays &amp; idents <Icon name="chevron-down" size={12} />
+        </summary>
         <button className="chip" onClick={() => overlayInput.current?.click()}>
           Add graphic (SVG, PNG…)
         </button>
@@ -942,27 +986,32 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             />
           </div>
         ))}
+      </details>
+
+      {/* end scroll region — export stays pinned below */}
       </div>
 
-      <div className="section">
+      <div className="export-panel">
         <h3>Export</h3>
         <div className="row">
           <label>Frame rate</label>
-          <select
-            value={project.output.fps}
-            onChange={(e) =>
-              useGlimpse.setState({
-                project: {
-                  ...project,
-                  output: { ...project.output, fps: Number(e.target.value) },
-                },
-              })
-            }
-          >
-            <option value={30}>30 fps</option>
-            <option value={60}>60 fps</option>
-            <option value={120}>120 fps</option>
-          </select>
+          <span className="select-wrap">
+            <select
+              value={project.output.fps}
+              onChange={(e) =>
+                useGlimpse.setState({
+                  project: {
+                    ...project,
+                    output: { ...project.output, fps: Number(e.target.value) },
+                  },
+                })
+              }
+            >
+              <option value={30}>30 fps</option>
+              <option value={60}>60 fps</option>
+              <option value={120}>120 fps</option>
+            </select>
+          </span>
         </div>
         <button
           className="btn primary"
@@ -972,24 +1021,24 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         >
           {exporting ? 'Rendering…' : 'Export MP4'}
         </button>
-        <button
-          className="btn"
-          onClick={() => void runExportGif()}
-          disabled={exporting}
-          style={{ width: '100%', marginTop: 8 }}
-          title="Animated GIF — reduced size & frame rate, honours trim + cuts"
-        >
-          Export GIF
-        </button>
-        <button
-          className="btn"
-          onClick={() => void exportPng(2)}
-          disabled={exporting}
-          style={{ width: '100%', marginTop: 8 }}
-          title="Renders the current frame at 2× output resolution"
-        >
-          Export PNG frame (2×)
-        </button>
+        <div className="export-buttons">
+          <button
+            className="btn"
+            onClick={() => void runExportGif()}
+            disabled={exporting}
+            title="Animated GIF — reduced size & frame rate, honours trim + cuts"
+          >
+            Export GIF
+          </button>
+          <button
+            className="btn"
+            onClick={() => void exportPng(2)}
+            disabled={exporting}
+            title="Renders the current frame at 2× output resolution"
+          >
+            Export PNG
+          </button>
+        </div>
         {audioDropped && (
           <p className="hint">
             Audio is skipped when clip speeds differ from 1× — reset speeds to keep

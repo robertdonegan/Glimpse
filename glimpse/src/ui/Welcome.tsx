@@ -6,6 +6,7 @@ import {
   type Sources,
   type CaptureTarget,
 } from '../capture/nativeCapture';
+import { LogoMark } from './Icon';
 
 /** Play triangle — tap to record. */
 function PlayMark() {
@@ -71,6 +72,7 @@ export function Welcome() {
   return (
     <div className="welcome">
       <div className="welcome-inner">
+        <LogoMark size={40} />
         <span className="wordmark">Glimpse</span>
 
         <button
