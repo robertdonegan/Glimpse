@@ -125,6 +125,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const addMusic = useGlimpse((s) => s.addMusic);
+  const removeMusic = useGlimpse((s) => s.removeMusic);
+  const removeRecordedAudio = useGlimpse((s) => s.removeRecordedAudio);
   const runExport = useGlimpse((s) => s.runExport);
   const runExportGif = useGlimpse((s) => s.runExportGif);
   const cancelExport = useGlimpse((s) => s.cancelExport);
@@ -862,9 +864,18 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         />
         {project.music && (
           <>
-            <p className="hint" style={{ margin: '8px 0' }}>
-              {project.music.name}
-            </p>
+            <div className="row" style={{ marginTop: 8 }}>
+              <label className="overlay-name" title={project.music.name}>
+                {project.music.name}
+              </label>
+              <button
+                className="chip"
+                onClick={removeMusic}
+                title="Delete the imported audio track"
+              >
+                Delete
+              </button>
+            </div>
             <SliderRow
               label="Volume"
               value={project.music.gain}
@@ -877,6 +888,18 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             />
             <p className="hint">Drag the green clip on the timeline to re-time it.</p>
           </>
+        )}
+        {recording.hasAudio && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <label>Recorded sound</label>
+            <button
+              className="chip"
+              onClick={removeRecordedAudio}
+              title="Delete the audio captured with the recording"
+            >
+              Delete
+            </button>
+          </div>
         )}
       </details>
 

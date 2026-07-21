@@ -92,6 +92,8 @@ interface GlimpseState {
   addMusic: (file: File) => Promise<void>;
   updateMusic: (patch: Partial<Omit<MusicTrack, 'blob'>>) => void;
   removeMusic: () => void;
+  /** Strip the recording's own captured audio track. */
+  removeRecordedAudio: () => void;
   setPreviewRate: (rate: number) => void;
 
   runExport: () => Promise<void>;
@@ -492,6 +494,15 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     const p = get().project;
     if (!p) return;
     commit({ ...p, music: undefined });
+  },
+
+  removeRecordedAudio: () => {
+    const p = get().project;
+    if (!p) return;
+    commit({
+      ...p,
+      recording: { ...p.recording, hasAudio: false, audioBlob: undefined },
+    });
   },
 
   setPreviewRate: (previewRate) => set({ previewRate }),
