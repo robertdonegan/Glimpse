@@ -116,7 +116,15 @@ function savePoseTemplates(t: Record<string, Pose>): void {
   localStorage.setItem(POSE_STORE_KEY, JSON.stringify(t));
 }
 
-export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
+export function Inspector({
+  selectedZoom,
+  gizmo = false,
+  onToggleGizmo,
+}: {
+  selectedZoom: string | null;
+  gizmo?: boolean;
+  onToggleGizmo?: () => void;
+}) {
   const project = useGlimpse((s) => s.project);
   const patchStyle = useGlimpse((s) => s.patchStyle);
   const updateZoom = useGlimpse((s) => s.updateZoom);
@@ -725,6 +733,16 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <summary>
           3D pose <Icon name="chevron-down" size={12} />
         </summary>
+        {onToggleGizmo && (
+          <button
+            className={`btn${gizmo ? ' on' : ''}`}
+            style={{ width: '100%', marginBottom: 8 }}
+            onClick={onToggleGizmo}
+            title="Show a rotation gizmo on the preview — drag its rings to tilt, turn and roll"
+          >
+            {gizmo ? 'Hide rotate gizmo' : 'Rotate on canvas'}
+          </button>
+        )}
         <div className="seg-row" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
           {Object.entries(POSE_PRESETS).map(([name, pose]) => (
             <button

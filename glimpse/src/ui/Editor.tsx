@@ -18,6 +18,7 @@ export function Editor() {
   const canUndo = useGlimpse((s) => s.past.length > 0);
   const canRedo = useGlimpse((s) => s.future.length > 0);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
+  const [gizmo, setGizmo] = useState(false);
 
   // Space = play/pause (trim-aware), ←/→ = frame step, Cmd/Ctrl+Z undo/redo.
   useEffect(() => {
@@ -133,9 +134,9 @@ export function Editor() {
           </button>
         </div>
       </header>
-      <Preview selectedZoom={selectedZoom} />
+      <Preview selectedZoom={selectedZoom} gizmo={gizmo} />
       <Timeline selectedZoom={selectedZoom} onSelectZoom={setSelectedZoom} />
-      <Inspector selectedZoom={selectedZoom} />
+      <Inspector selectedZoom={selectedZoom} gizmo={gizmo} onToggleGizmo={() => setGizmo((g) => !g)} />
     </div>
   );
 }
