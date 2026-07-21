@@ -138,7 +138,8 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
 
 /**
  * Place one audio buffer flat on the output timeline at `whenSec`, at 1× —
- * no per-piece slicing, so cuts and clip/global speed never touch it.
+ * no per-piece slicing, so cuts and clip/global speed never touch it. `intoSec`
+ * skips into the buffer (e.g. to honour the trim in-point).
  */
 function scheduleFlat(
   ctx: OfflineAudioContext,
@@ -146,6 +147,7 @@ function scheduleFlat(
   whenSec: number,
   gain: number,
   durSec: number,
+  intoSec = 0,
 ): void {
   const when = Math.max(0, whenSec);
   if (when >= durSec) return;
@@ -154,31 +156,39 @@ function scheduleFlat(
   const g = ctx.createGain();
   g.gain.value = gain;
   src.connect(g).connect(ctx.destination);
-  // A negative offset (clip dragged to start before 0) is honoured by skipping
-  // into the buffer.
-  const into = Math.max(0, -whenSec);
-  src.start(when, into, Math.min(buffer.duration - into, durSec - when));
+  // Skip into the buffer for the trim in-point, plus any negative when (clip
+  // dragged to start before 0).
+  const into = Math.max(0, intoSec) + Math.max(0, -whenSec);
+  const playable = buffer.duration - into;
+  if (playable <= 0) return;
+  src.start(when, into, Math.min(playable, durSec - when));
 }
 
 /**
  * Mix recorded audio and imported music into one 48 kHz stereo buffer. Both
- * tracks play continuously at 1× — the soundtrack is deliberately independent
- * of the video edit (cuts, clip speeds, global playback speed).
+ * tracks play at 1×, independent of cuts and speed, but bounded by the trim:
+ * playback starts at the trim in-point and can't run past the trimmed span.
  */
 async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
+  const trimStart = (project.trim?.start ?? 0) / 1000;
+  const trimEnd = (project.trim?.end ?? project.recording.duration) / 1000;
+  // Audio never plays longer than the trimmed span (nor the output).
+  const audioDur = Math.min(durSec, Math.max(0, trimEnd - trimStart));
   let any = false;
   if (project.recording.hasAudio) {
     const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
     if (b) {
-      scheduleFlat(ctx, b, 0, 1, durSec);
+      // Recorded audio is locked to the frames: start at the trim in-point.
+      scheduleFlat(ctx, b, 0, 1, audioDur, trimStart);
       any = true;
     }
   }
   if (project.music) {
     const b = await decodeAudio(project.music.blob);
     if (b) {
-      scheduleFlat(ctx, b, project.music.offset / 1000, project.music.gain, durSec);
+      // Music sits at its own offset, measured from the trim in-point.
+      scheduleFlat(ctx, b, project.music.offset / 1000 - trimStart, project.music.gain, audioDur);
       any = true;
     }
   }

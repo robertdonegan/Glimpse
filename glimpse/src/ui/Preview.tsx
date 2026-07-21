@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
-import { sampleFrame, speedAt, buildTimeline, sourceToOutput } from '../timeline/sampler';
+import { sampleFrame, speedAt } from '../timeline/sampler';
 import { loadRecordingVideo } from '../export/exporter';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -95,32 +95,35 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
           // preview-only slow-viewing rate.
           const rate = speedAt(current.zooms, tMs) * st.previewRate;
           video.playbackRate = rate;
+          const trimStart = current.trim?.start ?? 0;
           const trimEnd = current.trim?.end ?? current.recording.duration;
           if (video.ended || tMs >= trimEnd) {
             if (st.loop) {
-              video.currentTime = (current.trim?.start ?? 0) / 1000;
+              video.currentTime = trimStart / 1000;
               void video.play();
+              // Restart the music clock with the video so the soundtrack loops
+              // too instead of running on past the out-point.
+              playStartRef.current = performance.now();
+              musicStartedRef.current = false;
             } else {
               st.setPlaying(false);
             }
           }
 
-          // The music track is deliberately independent of the video edit —
-          // it plays straight through at 1×, unaffected by cuts or speed. Start
-          // it once at the right spot, then let it play natively: re-seeking a
-          // compressed audio element every frame snapped it back to cluster
-          // boundaries and stuttered ("a split second every second").
+          // The music track plays at 1×, independent of cuts and speed, but
+          // bounded by the trim: its clock is anchored to the trim in-point and
+          // restarts on loop. Start it once, then let it play natively —
+          // re-seeking a compressed audio element every frame stuttered.
           const music = current.music;
           const el = musicRef.current;
           if (music && el) {
-            const wall = (performance.now() - playStartRef.current) / 1000;
-            const pos = wall - music.offset / 1000; // music-local seconds
+            const pos =
+              (trimStart + (performance.now() - playStartRef.current) - music.offset) / 1000;
             const active = pos >= 0 && pos < music.duration / 1000;
             el.volume = music.gain;
             el.playbackRate = 1;
             if (active && !musicStartedRef.current) {
-              // Seek once, at the start of the clip's window, then leave it be.
-              el.currentTime = Math.max(0, pos);
+              el.currentTime = Math.max(0, pos); // seek once, on (re)start only
               void el.play();
               musicStartedRef.current = true;
             } else if (!active && musicStartedRef.current) {
@@ -170,13 +173,10 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     if (!video) return;
     if (playing) {
       const st = useGlimpse.getState();
-      // Anchor the music clock to the playhead's position on the output
-      // timeline, so the (independent) soundtrack lines up where it will on
-      // export regardless of cuts before the playhead.
-      if (st.project) {
-        const outMs = sourceToOutput(buildTimeline(st.project), st.playhead);
-        playStartRef.current = performance.now() - outMs;
-      }
+      // Anchor the music clock to real time elapsed since the trim in-point, so
+      // the soundtrack (independent of cuts/speed) starts in the right place.
+      const trimStart = st.project?.trim?.start ?? 0;
+      playStartRef.current = performance.now() - (st.playhead - trimStart);
       musicStartedRef.current = false; // start the music fresh for this session
       video.currentTime = st.playhead / 1000;
       void video.play();
