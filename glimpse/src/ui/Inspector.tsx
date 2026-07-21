@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
 import { Icon } from './Icon';
 import type { CursorStyle } from '../timeline/model';
-import { audioExportable } from '../export/exporter';
 import { clamp } from '../timeline/easing';
 
 function SliderRow({
@@ -174,8 +173,6 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
       });
     reader.readAsDataURL(file);
   };
-
-  const audioDropped = recording.hasAudio && !audioExportable(project);
 
   const blurRegions = style.blur ?? [];
   const setBlur = (
@@ -1039,12 +1036,6 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
             Export PNG
           </button>
         </div>
-        {audioDropped && (
-          <p className="hint">
-            Audio is skipped when clip speeds differ from 1× — reset speeds to keep
-            the soundtrack.
-          </p>
-        )}
         {exporting && (
           <button
             className="btn"

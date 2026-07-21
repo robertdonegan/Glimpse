@@ -20,7 +20,6 @@ import {
   buildTimeline,
   outputDuration,
   outputToSource,
-  type TimelinePiece,
 } from '../timeline/sampler';
 import { GlimpseRenderer } from '../render/renderer';
 
@@ -38,12 +37,14 @@ export function webCodecsSupported(): boolean {
   return typeof VideoEncoder !== 'undefined';
 }
 
-/** Audio survives export only at uniform 1× speed (no resampling pipeline). */
+/**
+ * Audio is an independent track: it plays straight through at 1×, unaffected
+ * by the timeline's clip speeds, the global playback speed, or cuts. So the
+ * only requirement is that the encoder exists and there's something to encode.
+ */
 export function audioExportable(project: Project): boolean {
   return (
-    (project.recording.hasAudio || !!project.music) &&
-    typeof AudioEncoder !== 'undefined' &&
-    project.zooms.every((z) => (z.speed || 1) === 1)
+    (project.recording.hasAudio || !!project.music) && typeof AudioEncoder !== 'undefined'
   );
 }
 
@@ -102,57 +103,48 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
 }
 
 /**
- * Schedule an audio buffer positioned at `partSrcOffsetMs` on the source
- * timeline across the kept pieces — so cuts drop their audio and the rest
- * joins up, matching the video. Speed is 1 here (audioExportable gate).
+ * Place one audio buffer flat on the output timeline at `whenSec`, at 1× —
+ * no per-piece slicing, so cuts and clip/global speed never touch it.
  */
-function scheduleAcrossPieces(
+function scheduleFlat(
   ctx: OfflineAudioContext,
-  pieces: TimelinePiece[],
   buffer: AudioBuffer,
-  partSrcOffsetMs: number,
+  whenSec: number,
   gain: number,
+  durSec: number,
 ): void {
-  const bufEndSrc = partSrcOffsetMs + buffer.duration * 1000;
-  for (const p of pieces) {
-    const s = Math.max(p.srcStart, partSrcOffsetMs);
-    const e = Math.min(p.srcEnd, bufEndSrc);
-    if (e - s <= 1) continue;
-    const when = (p.outStart + (s - p.srcStart) / p.speed) / 1000;
-    const offset = (s - partSrcOffsetMs) / 1000;
-    const dur = (e - s) / p.speed / 1000;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const g = ctx.createGain();
-    g.gain.value = gain;
-    src.connect(g).connect(ctx.destination);
-    src.start(when, offset, dur);
-  }
+  const when = Math.max(0, whenSec);
+  if (when >= durSec) return;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const g = ctx.createGain();
+  g.gain.value = gain;
+  src.connect(g).connect(ctx.destination);
+  // A negative offset (clip dragged to start before 0) is honoured by skipping
+  // into the buffer.
+  const into = Math.max(0, -whenSec);
+  src.start(when, into, Math.min(buffer.duration - into, durSec - when));
 }
 
 /**
- * Mix recorded audio and imported music into one 48 kHz stereo buffer laid
- * out on the (trimmed, cut) output timeline. OfflineAudioContext handles
- * resampling, offsets and gain in one deterministic pass.
+ * Mix recorded audio and imported music into one 48 kHz stereo buffer. Both
+ * tracks play continuously at 1× — the soundtrack is deliberately independent
+ * of the video edit (cuts, clip speeds, global playback speed).
  */
-async function renderMixedAudio(
-  project: Project,
-  pieces: TimelinePiece[],
-  durSec: number,
-): Promise<AudioBuffer | null> {
+async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
   let any = false;
   if (project.recording.hasAudio) {
     const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
     if (b) {
-      scheduleAcrossPieces(ctx, pieces, b, 0, 1);
+      scheduleFlat(ctx, b, 0, 1, durSec);
       any = true;
     }
   }
   if (project.music) {
     const b = await decodeAudio(project.music.blob);
     if (b) {
-      scheduleAcrossPieces(ctx, pieces, b, project.music.offset, project.music.gain);
+      scheduleFlat(ctx, b, project.music.offset / 1000, project.music.gain, durSec);
       any = true;
     }
   }
@@ -242,10 +234,9 @@ export async function exportProject(
   // render against black textures.
   await renderer.whenReady();
 
-  // Audio has no time-stretch pipeline, so it survives only at 1× global speed
-  // (same rule as per-clip speeds).
-  const withAudio = audioExportable(project) && spd === 1;
-  const audio = withAudio ? await renderMixedAudio(project, pieces, outDurationSec) : null;
+  // Audio is an independent 1× track — unaffected by cuts or speed.
+  const withAudio = audioExportable(project);
+  const audio = withAudio ? await renderMixedAudio(project, outDurationSec) : null;
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
