@@ -274,6 +274,17 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
                 title="Ease the cursor back to its opening position at the end — for seamless loops"
               />
             </div>
+            <div className="row">
+              <label>Glide across cuts</label>
+              <input
+                type="checkbox"
+                checked={style.cursor.bridgeCuts}
+                onChange={(e) =>
+                  patchStyle('cursor', { ...style.cursor, bridgeCuts: e.target.checked })
+                }
+                title="Ease the cursor between cut sections instead of jumping — for continuity"
+              />
+            </div>
           </>
         ) : (
           <p className="hint">

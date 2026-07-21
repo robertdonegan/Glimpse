@@ -209,6 +209,25 @@ export function sampleFrame(project: Project, t: number, speed = 1): FrameState 
         }
       }
 
+      // Glide across cuts: when a section is removed the source time jumps from
+      // the cut's start to its end, snapping the cursor. If enabled, ease the
+      // cursor out of its pre-cut position over a short window after playback
+      // resumes, so it flows into the new position instead of teleporting.
+      if (style.cursor.bridgeCuts) {
+        const BRIDGE_MS = 400;
+        for (const c of project.cuts ?? []) {
+          if (t >= c.end && t < c.end + BRIDGE_MS) {
+            const before = sampleCursor(recording.cursor, c.start, style.cursor.smoothing);
+            if (before) {
+              const k = smoother((t - c.end) / BRIDGE_MS);
+              cx = lerp(before.x, cx, k);
+              cy = lerp(before.y, cy, k);
+            }
+            break;
+          }
+        }
+      }
+
       // Return to start: ease the cursor back to its opening position over the
       // tail of the trimmed span, so a looped export has no visible jump.
       if (style.cursor.returnToStart) {
