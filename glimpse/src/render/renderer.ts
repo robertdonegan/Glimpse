@@ -916,9 +916,12 @@ export class GlimpseRenderer {
         this.keyMesh.material.needsUpdate = true;
         this.keyAspect = entry.aspect;
       }
-      const h = this.viewH * 0.085;
+      const h = this.viewH * 0.075;
       this.keyMesh.scale.set(h * this.keyAspect, h, 1);
-      this.keyMesh.position.set(0, -this.viewH * 0.5 + h * 1.1, 0);
+      // Pin to the recording's bottom edge (following its placement), not the
+      // view edge — otherwise a padded or repositioned recording leaves the
+      // keycap floating outside the frame.
+      this.keyMesh.position.set(offX, offY - this.planeH * 0.5 + h * 1.4, 0);
       const a = frame.key.age < 0.6 ? 1 : Math.max(0, 1 - (frame.key.age - 0.6) / 0.4);
       this.keyMesh.material.opacity = a;
       this.keyMesh.visible = true;
