@@ -338,7 +338,7 @@ export function Timeline({
           </button>
           <label
             className="rate-slider"
-            title="Preview playback speed (slow viewing only — export is unaffected)"
+            title="Playback speed — also applied on export (slow-motion). Audio is dropped below 1×."
           >
             Playback speed
             <input

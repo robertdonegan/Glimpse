@@ -507,6 +507,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
         p,
         (exportProgress) => set({ exportProgress }),
         controller.signal,
+        get().previewRate,
       );
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.${result.extension}`);
     } catch (e) {
@@ -525,7 +526,12 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     exportAbort = controller;
     set({ exporting: true, exportProgress: null, playing: false });
     try {
-      const result = await exportGif(p, (exportProgress) => set({ exportProgress }), controller.signal);
+      const result = await exportGif(
+        p,
+        (exportProgress) => set({ exportProgress }),
+        controller.signal,
+        get().previewRate,
+      );
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.gif`);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') throw e;
