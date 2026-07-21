@@ -92,13 +92,16 @@ const VIDEO_FRAG = /* glsl */ `
   uniform float dofAmount;  // world blur radius per world unit of defocus; 0 = off
   uniform float focusDist;  // world units from camera
 
-  // Rounded-rect SDF for corner masking with 1px-ish AA.
+  // Rounded-rect SDF for corner masking. AA width is a small fixed fraction of
+  // the plane — NOT fwidth(): this is called from inside the bokeh loop (below
+  // a coc-dependent branch), and screen-space derivatives in non-uniform
+  // control flow are undefined and produce driver-specific line artifacts.
   float rectAlpha(vec2 uv) {
     vec2 p = (uv - 0.5) * planeSize;
     vec2 b = planeSize * 0.5 - vec2(radius);
     vec2 d = abs(p) - b;
     float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-    float aa = fwidth(dist);
+    float aa = 0.0035 * min(planeSize.x, planeSize.y);
     return 1.0 - smoothstep(-aa, aa, dist);
   }
 
@@ -806,6 +809,17 @@ export class GlimpseRenderer {
       offY + (camera.focusY - 0.5) * this.planeH * s,
       0,
     );
+
+    // Depth of field focuses at the framed point (the followed cursor, a zoom's
+    // focus, or the centre) — compute its view-space depth so that point stays
+    // sharp even when the tilted plane puts it off the default focus plane.
+    if (this.style.dof.enabled) {
+      this.videoPlane.updateWorldMatrix(true, false);
+      const fp = new THREE.Vector3(camera.focusX - 0.5, 0.5 - camera.focusY, 0).applyMatrix4(
+        this.videoPlane.matrixWorld,
+      );
+      this.videoPlane.material.uniforms.focusDist.value = FOCUS_DIST - fp.z;
+    }
 
     // Redaction blur regions pinned to the recording.
     const blur = this.style.blur ?? [];
