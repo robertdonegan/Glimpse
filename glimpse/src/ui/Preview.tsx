@@ -127,7 +127,7 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         } else if (musicRef.current && !musicRef.current.paused) {
           musicRef.current.pause();
         }
-        renderer.render(sampleFrame(current, tMs));
+        renderer.render(sampleFrame(current, tMs, st.previewRate));
         raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
