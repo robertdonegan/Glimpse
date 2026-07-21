@@ -775,8 +775,8 @@ export function Inspector({
         <SliderRow
           label="Tilt X"
           value={style.pose.rotX}
-          min={-75}
-          max={75}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotX: v })}
@@ -784,8 +784,8 @@ export function Inspector({
         <SliderRow
           label="Turn Y"
           value={style.pose.rotY}
-          min={-75}
-          max={75}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotY: v })}
@@ -793,8 +793,8 @@ export function Inspector({
         <SliderRow
           label="Roll Z"
           value={style.pose.rotZ}
-          min={-20}
-          max={20}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotZ: v })}
@@ -884,8 +884,8 @@ export function Inspector({
               <SliderRow
                 label="Tilt X"
                 value={zoom.pose.rotX}
-                min={-75}
-                max={75}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotX: v } })}
@@ -893,8 +893,8 @@ export function Inspector({
               <SliderRow
                 label="Turn Y"
                 value={zoom.pose.rotY}
-                min={-75}
-                max={75}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotY: v } })}
@@ -902,8 +902,8 @@ export function Inspector({
               <SliderRow
                 label="Roll Z"
                 value={zoom.pose.rotZ}
-                min={-20}
-                max={20}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotZ: v } })}

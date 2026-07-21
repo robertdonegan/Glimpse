@@ -686,23 +686,40 @@ input[type='range']::-moz-range-thumb {
 
 .giz-ring {
   stroke-width: 2;
+  opacity: 0.85;
   filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.5));
+  transition: stroke-width 100ms ease, opacity 100ms ease;
 }
 
+/* `color` matches the stroke so the hover/active glow (drop-shadow uses the
+   element's color) tints per axis. */
 .giz-x {
   stroke: #ff5b6a;
+  color: #ff5b6a;
 }
 
 .giz-y {
   stroke: #3ddc84;
+  color: #3ddc84;
 }
 
 .giz-z {
   stroke: #4aa3ff;
+  color: #4aa3ff;
 }
 
 .giz-tick {
   stroke-width: 2;
+  opacity: 0.85;
+}
+
+/* Highlight a ring on hover (its adjacent hit sibling) or while dragging. */
+.giz-hit:hover + .giz-ring,
+.giz-ring.active,
+.giz-tick.active {
+  stroke-width: 4;
+  opacity: 1;
+  filter: drop-shadow(0 0 3px currentColor);
 }
 
 .giz-hit {
