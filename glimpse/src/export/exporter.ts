@@ -123,6 +123,56 @@ async function seekToFrame(video: HTMLVideoElement, timeSec: number): Promise<vo
   }
 }
 
+/**
+ * Decode audio from a container the `<video>`/`<audio>` element can play but
+ * `decodeAudioData` rejects (notably native QuickTime `.mov` captures). Plays
+ * the media once through a MediaStreamDestination, records that to webm/opus,
+ * then decodes the webm — the fallback path when direct decode fails.
+ */
+async function decodeViaPlayback(blob: Blob): Promise<AudioBuffer | null> {
+  const el = document.createElement('video');
+  el.src = URL.createObjectURL(blob);
+  el.muted = false;
+  el.volume = 1;
+  try {
+    await new Promise<void>((res, rej) => {
+      el.onloadedmetadata = () => res();
+      el.onerror = () => rej(new Error('media load failed'));
+    });
+    const ctx = new AudioContext();
+    const source = ctx.createMediaElementSource(el);
+    const dest = ctx.createMediaStreamDestination();
+    source.connect(dest); // route to capture only — nothing to the speakers
+    if (dest.stream.getAudioTracks().length === 0) {
+      void ctx.close();
+      return null;
+    }
+    const rec = new MediaRecorder(dest.stream, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined,
+    });
+    const chunks: BlobPart[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const done = new Promise<void>((res) => (rec.onstop = () => res()));
+    rec.start();
+    await el.play();
+    await new Promise<void>((res) => {
+      el.onended = () => res();
+    });
+    rec.stop();
+    await done;
+    void ctx.close();
+    const webm = new Blob(chunks, { type: 'audio/webm' });
+    const decoded = await new AudioContext().decodeAudioData(await webm.arrayBuffer());
+    return decoded;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(el.src);
+  }
+}
+
 /** Decode the recording's audio track to PCM. Null if decode fails. */
 async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
   try {
@@ -132,7 +182,9 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
     void ctx.close();
     return audio;
   } catch {
-    return null;
+    // Some containers (native .mov) play but won't decode directly — capture
+    // the audio by playing it through once.
+    return decodeViaPlayback(blob);
   }
 }
 

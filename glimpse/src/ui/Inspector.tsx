@@ -81,6 +81,9 @@ type Pose = { rotX: number; rotY: number; rotZ: number };
 
 const POSE_PRESETS: Record<string, Pose> = {
   Flat: { rotX: 0, rotY: 0, rotZ: 0 },
+  Isometric: { rotX: 35, rotY: 45, rotZ: 0 },
+  'Isometric (mirror)': { rotX: 35, rotY: -45, rotZ: 0 },
+  Planometric: { rotX: 60, rotY: 0, rotZ: 45 },
   'Hero left': { rotX: 6, rotY: 18, rotZ: -2 },
   'Hero right': { rotX: 6, rotY: -18, rotZ: 2 },
   'Hero left XL': { rotX: 8, rotY: 32, rotZ: -3 },
@@ -116,7 +119,15 @@ function savePoseTemplates(t: Record<string, Pose>): void {
   localStorage.setItem(POSE_STORE_KEY, JSON.stringify(t));
 }
 
-export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
+export function Inspector({
+  selectedZoom,
+  gizmo = false,
+  onToggleGizmo,
+}: {
+  selectedZoom: string | null;
+  gizmo?: boolean;
+  onToggleGizmo?: () => void;
+}) {
   const project = useGlimpse((s) => s.project);
   const patchStyle = useGlimpse((s) => s.patchStyle);
   const updateZoom = useGlimpse((s) => s.updateZoom);
@@ -725,40 +736,79 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <summary>
           3D pose <Icon name="chevron-down" size={12} />
         </summary>
-        <div className="seg-row" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
-          {Object.entries(POSE_PRESETS).map(([name, pose]) => (
-            <button
-              key={name}
-              className={`chip${poseMatches(pose) ? ' on' : ''}`}
-              onClick={() => patchStyle('pose', pose)}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-        {Object.keys(poseTemplates).length > 0 && (
-          <div className="seg-row" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
-            {Object.entries(poseTemplates).map(([name, pose]) => (
-              <button
-                key={name}
-                className={`chip${poseMatches(pose) ? ' on' : ''}`}
-                onClick={() => patchStyle('pose', pose)}
-                title="Saved template — right-click to delete"
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  deletePoseTemplate(name);
-                }}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
+        {onToggleGizmo && (
+          <button
+            className={`btn${gizmo ? ' on' : ''}`}
+            style={{ width: '100%', marginBottom: 8 }}
+            onClick={onToggleGizmo}
+            title="Show a rotation gizmo on the preview — drag its rings to tilt, turn and roll"
+          >
+            {gizmo ? 'Hide rotate gizmo' : 'Rotate on canvas'}
+          </button>
         )}
+        {(() => {
+          // Which preset / saved template the current pose matches (else Custom).
+          const presetName = Object.entries(POSE_PRESETS).find(([, p]) => poseMatches(p))?.[0];
+          const tmplName = Object.entries(poseTemplates).find(([, p]) => poseMatches(p))?.[0];
+          const value = presetName
+            ? `preset:${presetName}`
+            : tmplName
+              ? `tmpl:${tmplName}`
+              : 'custom';
+          return (
+            <>
+              <div className="row">
+                <label>Preset</label>
+                <span className="select-wrap">
+                  <select
+                    value={value}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.startsWith('preset:')) patchStyle('pose', POSE_PRESETS[v.slice(7)]);
+                      else if (v.startsWith('tmpl:')) patchStyle('pose', poseTemplates[v.slice(5)]);
+                    }}
+                    aria-label="Pose preset"
+                  >
+                    {value === 'custom' && <option value="custom">Custom</option>}
+                    <optgroup label="Prefabs">
+                      {Object.keys(POSE_PRESETS).map((name) => (
+                        <option key={name} value={`preset:${name}`}>
+                          {name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {Object.keys(poseTemplates).length > 0 && (
+                      <optgroup label="My templates">
+                        {Object.keys(poseTemplates).map((name) => (
+                          <option key={name} value={`tmpl:${name}`}>
+                            {name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </span>
+              </div>
+              {tmplName && (
+                <div className="row">
+                  <label>Template</label>
+                  <button
+                    className="chip"
+                    onClick={() => deletePoseTemplate(tmplName)}
+                    title="Delete this saved template"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
+            </>
+          );
+        })()}
         <SliderRow
           label="Tilt X"
           value={style.pose.rotX}
-          min={-75}
-          max={75}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotX: v })}
@@ -766,8 +816,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <SliderRow
           label="Turn Y"
           value={style.pose.rotY}
-          min={-75}
-          max={75}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotY: v })}
@@ -775,8 +825,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
         <SliderRow
           label="Roll Z"
           value={style.pose.rotZ}
-          min={-20}
-          max={20}
+          min={-180}
+          max={180}
           step={1}
           format={(v) => `${v}°`}
           onChange={(v) => patchStyle('pose', { ...style.pose, rotZ: v })}
@@ -866,8 +916,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               <SliderRow
                 label="Tilt X"
                 value={zoom.pose.rotX}
-                min={-75}
-                max={75}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotX: v } })}
@@ -875,8 +925,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               <SliderRow
                 label="Turn Y"
                 value={zoom.pose.rotY}
-                min={-75}
-                max={75}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotY: v } })}
@@ -884,8 +934,8 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
               <SliderRow
                 label="Roll Z"
                 value={zoom.pose.rotZ}
-                min={-20}
-                max={20}
+                min={-180}
+                max={180}
                 step={1}
                 format={(v) => `${v}°`}
                 onChange={(v) => updateZoom(zoom.id, { pose: { ...zoom.pose!, rotZ: v } })}

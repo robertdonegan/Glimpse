@@ -3,6 +3,7 @@ import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
 import { sampleFrame, speedAt } from '../timeline/sampler';
 import { loadRecordingVideo } from '../export/exporter';
+import { PoseGizmo } from './PoseGizmo';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
@@ -14,7 +15,13 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
  * Dragging the canvas pans the selected zoom (or the zoom under the
  * playhead) — direct-manipulation framing.
  */
-export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
+export function Preview({
+  selectedZoom,
+  gizmo = false,
+}: {
+  selectedZoom: string | null;
+  gizmo?: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<GlimpseRenderer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -251,12 +258,20 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
 
   return (
     <div className="preview-wrap">
-      <canvas
-        ref={canvasRef}
-        className={`preview-canvas${pannable ? ' pannable' : ''}`}
-        onPointerDown={onPointerDown}
-        title="Drag to reposition the recording (or pan a zoom under the playhead)"
-      />
+      <div className="preview-stage">
+        <canvas
+          ref={canvasRef}
+          className={`preview-canvas${pannable ? ' pannable' : ''}`}
+          onPointerDown={onPointerDown}
+          title="Drag to reposition the recording (or pan a zoom under the playhead)"
+        />
+        {gizmo && project && (
+          <PoseGizmo
+            pose={project.style.pose}
+            onChange={(p) => useGlimpse.getState().patchStyle('pose', p)}
+          />
+        )}
+      </div>
     </div>
   );
 }

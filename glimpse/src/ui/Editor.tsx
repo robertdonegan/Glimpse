@@ -18,6 +18,7 @@ export function Editor() {
   const canUndo = useGlimpse((s) => s.past.length > 0);
   const canRedo = useGlimpse((s) => s.future.length > 0);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
+  const [gizmo, setGizmo] = useState(false);
 
   // Space = play/pause (trim-aware), ←/→ = frame step, Cmd/Ctrl+Z undo/redo.
   useEffect(() => {
@@ -58,6 +59,34 @@ export function Editor() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Backspace / Delete removes the selected zoom (with a confirm). Separate
+  // effect so it always sees the current selection.
+  useEffect(() => {
+    if (!selectedZoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Backspace' && e.code !== 'Delete') return;
+      const t = e.target as HTMLElement;
+      if (
+        t.tagName === 'INPUT' ||
+        t.tagName === 'SELECT' ||
+        t.tagName === 'TEXTAREA' ||
+        t.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+      const st = useGlimpse.getState();
+      const z = st.project?.zooms.find((zz) => zz.id === selectedZoom);
+      const label = z ? `${z.scale.toFixed(1)}× zoom` : 'zoom';
+      if (window.confirm(`Delete this ${label}?`)) {
+        st.removeZoom(selectedZoom);
+        setSelectedZoom(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedZoom]);
 
   if (!project) return null;
 
@@ -133,9 +162,9 @@ export function Editor() {
           </button>
         </div>
       </header>
-      <Preview selectedZoom={selectedZoom} />
+      <Preview selectedZoom={selectedZoom} gizmo={gizmo} />
       <Timeline selectedZoom={selectedZoom} onSelectZoom={setSelectedZoom} />
-      <Inspector selectedZoom={selectedZoom} />
+      <Inspector selectedZoom={selectedZoom} gizmo={gizmo} onToggleGizmo={() => setGizmo((g) => !g)} />
     </div>
   );
 }

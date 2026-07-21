@@ -832,13 +832,18 @@ export class GlimpseRenderer {
     const sp = this.style.spotlight;
     if (sp?.enabled) {
       this.spotMesh.visible = true;
-      this.spotMesh.scale.set(this.planeW, this.planeH, 1);
+      // Overscan the darkening quad past the recording edge so its own
+      // antialiased border falls on the backdrop, not on the recording — else
+      // the bright screen edge peeks through the falloff. Compensate the pool
+      // centre/radius for the extra margin.
+      const MARG = 1.06;
+      this.spotMesh.scale.set(this.planeW * MARG, this.planeH * MARG, 1);
       this.spotMesh.position.set(0, 0, 0.03);
       const cx = sp.follow && cursor.visible ? cursor.x : sp.x;
       const cy = sp.follow && cursor.visible ? cursor.y : sp.y;
       const u = this.spotMesh.material.uniforms;
-      u.center.value.set(cx, 1 - cy);
-      u.radius.value = sp.radius;
+      u.center.value.set(0.5 + (cx - 0.5) / MARG, 0.5 + (1 - cy - 0.5) / MARG);
+      u.radius.value = sp.radius / MARG;
       u.strength.value = sp.strength;
       u.aspect.value = this.planeW / this.planeH;
     } else {
@@ -911,9 +916,12 @@ export class GlimpseRenderer {
         this.keyMesh.material.needsUpdate = true;
         this.keyAspect = entry.aspect;
       }
-      const h = this.viewH * 0.085;
+      const h = this.viewH * 0.075;
       this.keyMesh.scale.set(h * this.keyAspect, h, 1);
-      this.keyMesh.position.set(0, -this.viewH * 0.5 + h * 1.1, 0);
+      // Pin to the recording's bottom edge (following its placement), not the
+      // view edge — otherwise a padded or repositioned recording leaves the
+      // keycap floating outside the frame.
+      this.keyMesh.position.set(offX, offY - this.planeH * 0.5 + h * 1.4, 0);
       const a = frame.key.age < 0.6 ? 1 : Math.max(0, 1 - (frame.key.age - 0.6) / 0.4);
       this.keyMesh.material.opacity = a;
       this.keyMesh.visible = true;
