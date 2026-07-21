@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
 import { sampleFrame, speedAt } from '../timeline/sampler';
@@ -32,6 +32,9 @@ export function Preview({
   /** True once the music element has been started for this play session, so the
    * loop never re-seeks or re-triggers it mid-clip (which stuttered). */
   const musicStartedRef = useRef(false);
+  /** Rendered CSS size of the canvas, so the rotation-gizmo overlay can pin to
+   * it without a fragile circular-CSS wrapper. */
+  const [canvasBox, setCanvasBox] = useState({ w: 0, h: 0 });
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
@@ -164,6 +167,20 @@ export function Preview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.recording]);
 
+  // Track the canvas's rendered size so the gizmo overlay matches it exactly.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const measure = () => {
+      const r = canvas.getBoundingClientRect();
+      setCanvasBox({ w: r.width, h: r.height });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [project?.recording]);
+
   // Keep the renderer in sync with style edits.
   useEffect(() => {
     if (project) rendererRef.current?.applyStyle(project.style);
@@ -258,20 +275,23 @@ export function Preview({
 
   return (
     <div className="preview-wrap">
-      <div className="preview-stage">
-        <canvas
-          ref={canvasRef}
-          className={`preview-canvas${pannable ? ' pannable' : ''}`}
-          onPointerDown={onPointerDown}
-          title="Drag to reposition the recording (or pan a zoom under the playhead)"
-        />
-        {gizmo && project && (
+      <canvas
+        ref={canvasRef}
+        className={`preview-canvas${pannable ? ' pannable' : ''}`}
+        onPointerDown={onPointerDown}
+        title="Drag to reposition the recording (or pan a zoom under the playhead)"
+      />
+      {gizmo && project && canvasBox.w > 0 && (
+        <div
+          className="pose-gizmo-overlay"
+          style={{ width: canvasBox.w, height: canvasBox.h }}
+        >
           <PoseGizmo
             pose={project.style.pose}
             onChange={(p) => useGlimpse.getState().patchStyle('pose', p)}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
