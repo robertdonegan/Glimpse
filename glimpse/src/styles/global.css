@@ -641,10 +641,14 @@ input[type='range']::-moz-range-thumb {
   background: var(--surface-2);
 }
 
-/* Wraps the canvas tightly so an overlay (rotation gizmo) can pin to it. */
+/* Wraps the canvas tightly so an overlay (rotation gizmo) can pin to it.
+   align/justify centre so the flex default (stretch) can't distort the
+   canvas's aspect ratio. */
 .preview-stage {
   position: relative;
   display: flex;
+  align-items: center;
+  justify-content: center;
   max-width: 95%;
   max-height: 95%;
 }
