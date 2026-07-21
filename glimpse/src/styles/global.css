@@ -630,9 +630,9 @@ input[type='range']::-moz-range-thumb {
 
 .preview-wrap {
   grid-area: preview;
-  display: grid;
-  place-items: center;
-  padding: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
   min-width: 0;
   /* Clip the canvas to its cell so a tall/large preview can never spill down
@@ -642,11 +642,14 @@ input[type='range']::-moz-range-thumb {
 }
 
 .preview-canvas {
-  max-width: 100%;
-  max-height: 100%;
+  /* The canvas element carries its own intrinsic ratio (width/height attrs),
+     so it scales to fit like an image — centred, filling ~95% of the cell. */
+  max-width: 95%;
+  max-height: 95%;
+  width: auto;
+  height: auto;
   border-radius: 4px;
   border: 1px solid var(--border);
-  aspect-ratio: var(--preview-aspect, 16 / 9);
 }
 
 .preview-canvas.pannable {
