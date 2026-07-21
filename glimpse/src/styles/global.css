@@ -673,6 +673,7 @@ input[type='range']::-moz-range-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   min-height: 0;
   min-width: 0;
   /* Clip the canvas to its cell so a tall/large preview can never spill down
@@ -681,23 +682,21 @@ input[type='range']::-moz-range-thumb {
   background: var(--surface-2);
 }
 
-/* Wraps the canvas tightly so an overlay (rotation gizmo) can pin to it.
-   align/justify centre so the flex default (stretch) can't distort the
-   canvas's aspect ratio. */
-.preview-stage {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  max-width: 95%;
-  max-height: 95%;
+/* Rotation-gizmo overlay: absolutely centred and sized (via JS) to match the
+   canvas, so it doesn't need a wrapper whose sizing can collapse the canvas. */
+.pose-gizmo-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .preview-canvas {
-  /* The canvas element carries its own intrinsic ratio (width/height attrs),
-     so it scales to fit like an image — centred, filling ~95% of the cell. */
-  max-width: 100%;
-  max-height: 100%;
+  /* Sizes off the wrap directly (definite reference) — scales to fit like an
+     image, centred, filling ~95% of the cell, keeping its intrinsic ratio. */
+  max-width: 95%;
+  max-height: 95%;
   width: auto;
   height: auto;
   border-radius: 4px;
