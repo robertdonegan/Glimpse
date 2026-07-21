@@ -60,6 +60,34 @@ export function Editor() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Backspace / Delete removes the selected zoom (with a confirm). Separate
+  // effect so it always sees the current selection.
+  useEffect(() => {
+    if (!selectedZoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Backspace' && e.code !== 'Delete') return;
+      const t = e.target as HTMLElement;
+      if (
+        t.tagName === 'INPUT' ||
+        t.tagName === 'SELECT' ||
+        t.tagName === 'TEXTAREA' ||
+        t.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+      const st = useGlimpse.getState();
+      const z = st.project?.zooms.find((zz) => zz.id === selectedZoom);
+      const label = z ? `${z.scale.toFixed(1)}× zoom` : 'zoom';
+      if (window.confirm(`Delete this ${label}?`)) {
+        st.removeZoom(selectedZoom);
+        setSelectedZoom(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedZoom]);
+
   if (!project) return null;
 
   const confirmNew = () => {
