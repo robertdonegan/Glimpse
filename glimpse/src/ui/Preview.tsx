@@ -22,6 +22,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   /** Wall-clock instant playback last started — the music track's own clock,
    * so it stays independent of video cuts and speed. */
   const playStartRef = useRef(0);
+  /** True once the music element has been started for this play session, so the
+   * loop never re-seeks or re-triggers it mid-clip (which stuttered). */
+  const musicStartedRef = useRef(false);
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
@@ -103,8 +106,10 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
           }
 
           // The music track is deliberately independent of the video edit —
-          // it plays straight through at 1×, unaffected by cuts or speed. Drive
-          // it from wall-clock elapsed since playback began, not source time.
+          // it plays straight through at 1×, unaffected by cuts or speed. Start
+          // it once at the right spot, then let it play natively: re-seeking a
+          // compressed audio element every frame snapped it back to cluster
+          // boundaries and stuttered ("a split second every second").
           const music = current.music;
           const el = musicRef.current;
           if (music && el) {
@@ -113,19 +118,19 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
             const active = pos >= 0 && pos < music.duration / 1000;
             el.volume = music.gain;
             el.playbackRate = 1;
-            if (active) {
-              if (el.paused) {
-                el.currentTime = pos;
-                void el.play();
-              } else if (Math.abs(el.currentTime - pos) > 0.35) {
-                el.currentTime = pos; // drift correction
-              }
-            } else if (!el.paused) {
+            if (active && !musicStartedRef.current) {
+              // Seek once, at the start of the clip's window, then leave it be.
+              el.currentTime = Math.max(0, pos);
+              void el.play();
+              musicStartedRef.current = true;
+            } else if (!active && musicStartedRef.current) {
               el.pause();
+              musicStartedRef.current = false;
             }
           }
-        } else if (musicRef.current && !musicRef.current.paused) {
-          musicRef.current.pause();
+        } else if (musicRef.current) {
+          if (!musicRef.current.paused) musicRef.current.pause();
+          musicStartedRef.current = false; // fresh start next time play begins
         }
         renderer.render(sampleFrame(current, tMs, st.previewRate));
         raf = requestAnimationFrame(loop);
@@ -172,6 +177,7 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         const outMs = sourceToOutput(buildTimeline(st.project), st.playhead);
         playStartRef.current = performance.now() - outMs;
       }
+      musicStartedRef.current = false; // start the music fresh for this session
       video.currentTime = st.playhead / 1000;
       void video.play();
     } else {
