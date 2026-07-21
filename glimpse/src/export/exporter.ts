@@ -89,6 +89,40 @@ function seekTo(video: HTMLVideoElement, timeSec: number): Promise<void> {
   });
 }
 
+/**
+ * Land on `timeSec` with a decoded frame actually presented. A plain seek can
+ * resolve without a frame ready (metadata only, or an early-return when already
+ * near the target) — for a one-shot render (PNG still) that uploads a black
+ * VideoTexture. Nudge off the target first so the seek always fires, then wait
+ * for the frame via requestVideoFrameCallback (with a timeout fallback).
+ */
+async function seekToFrame(video: HTMLVideoElement, timeSec: number): Promise<void> {
+  if (Math.abs(video.currentTime - timeSec) < 1 / 120) {
+    // Nudge to a genuinely different instant so the re-seek fires and decodes a
+    // frame — forward near the start (a backward nudge from 0 would be a no-op).
+    await seekTo(video, timeSec < 0.1 ? timeSec + 0.06 : timeSec - 0.06);
+  }
+  await seekTo(video, timeSec);
+  const rvfc = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: () => void) => number;
+  };
+  if (typeof rvfc.requestVideoFrameCallback === 'function') {
+    await new Promise<void>((res) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        res();
+      };
+      const t = setTimeout(finish, 200);
+      rvfc.requestVideoFrameCallback!(() => {
+        clearTimeout(t);
+        finish();
+      });
+    });
+  }
+}
+
 /** Decode the recording's audio track to PCM. Null if decode fails. */
 async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
   try {
@@ -233,6 +267,8 @@ export async function exportProject(
   // Backdrop / overlay bitmaps decode async — wait for them or the first frames
   // render against black textures.
   await renderer.whenReady();
+  // Prime the decoder so the very first frame isn't a black VideoTexture.
+  await seekToFrame(video, outputToSource(pieces, 0) / 1000);
 
   // Audio is an independent 1× track — unaffected by cuts or speed.
   const withAudio = audioExportable(project);
@@ -378,6 +414,7 @@ export async function exportGif(
   await renderer.whenReady();
 
   const pieces = buildTimeline(project);
+  await seekToFrame(video, outputToSource(pieces, 0) / 1000); // prime the decoder
   const durSec = Math.max(0.001, outputDuration(pieces) / 1000) / spd;
   const totalFrames = Math.max(1, Math.floor(durSec * GIF_FPS));
   const delay = Math.round(1000 / GIF_FPS);
@@ -428,7 +465,7 @@ export async function exportStill(project: Project, tMs: number, scale = 2): Pro
   try {
     renderer.attachVideo(video);
     await renderer.whenReady();
-    await seekTo(video, tMs / 1000);
+    await seekToFrame(video, tMs / 1000);
     renderer.render(sampleFrame(project, tMs));
     return await new Promise<Blob>((res, rej) =>
       canvas.toBlob((b) => (b ? res(b) : rej(new Error('PNG encode failed'))), 'image/png'),
