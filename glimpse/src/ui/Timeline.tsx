@@ -90,6 +90,7 @@ export function Timeline({
   const applyAutoZoom = useGlimpse((s) => s.applyAutoZoom);
   const updateMusic = useGlimpse((s) => s.updateMusic);
   const removeMusic = useGlimpse((s) => s.removeMusic);
+  const removeRecordedAudio = useGlimpse((s) => s.removeRecordedAudio);
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const previewRate = useGlimpse((s) => s.previewRate);
   const setPreviewRate = useGlimpse((s) => s.setPreviewRate);
@@ -338,7 +339,7 @@ export function Timeline({
           </button>
           <label
             className="rate-slider"
-            title="Preview playback speed (slow viewing only — export is unaffected)"
+            title="Playback speed — also applied on export (slow-motion). Audio is dropped below 1×."
           >
             Playback speed
             <input
@@ -479,8 +480,17 @@ export function Timeline({
       {(project.recording.audioBlob || project.music) && (
         <div className="audio-lane">
           {project.recording.audioBlob && (
-            <div className="audio-rec" title="Recorded audio (locked to the video)">
+            <div className="audio-rec" title="Recorded sound — plays straight through at 1×">
               <Waveform blob={project.recording.audioBlob} color="rgba(45, 212, 191, 0.6)" />
+              <button
+                className="music-remove"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={removeRecordedAudio}
+                title="Delete recorded sound"
+                aria-label="Delete recorded sound"
+              >
+                ×
+              </button>
             </div>
           )}
           {project.music && (

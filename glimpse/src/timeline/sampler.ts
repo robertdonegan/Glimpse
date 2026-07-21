@@ -126,7 +126,12 @@ function catmull(p0: number, p1: number, p2: number, p3: number, t: number): num
 
 const CLICK_PULSE_MS = 420;
 
-export function sampleFrame(project: Project, t: number): FrameState {
+/**
+ * @param speed Global playback-speed multiplier in effect (the timeline speed
+ * slider). Only the click-highlight pulse uses it: the flash is kept to a fixed
+ * real-time duration, so slowing the video down doesn't stretch it out.
+ */
+export function sampleFrame(project: Project, t: number, speed = 1): FrameState {
   const { recording, style, zooms } = project;
   const camera = sampleCamera(zooms, t);
 
@@ -222,8 +227,13 @@ export function sampleFrame(project: Project, t: number): FrameState {
 
       let pulse = 0;
       if (style.cursor.clickHighlight) {
+        // The pulse is a fixed real-time flash: convert the source-time gap
+        // since each click into real (output) time by dividing out the local
+        // playback rate — the clip's own speed times the global speed — so
+        // slow-motion doesn't drag the highlight out with it.
+        const localSpeed = Math.max(0.01, speedAt(zooms, t) * speed);
         for (let i = recording.clicks.length - 1; i >= 0; i--) {
-          const dt = t - recording.clicks[i].t;
+          const dt = (t - recording.clicks[i].t) / localSpeed;
           if (dt < 0) continue;
           if (dt > CLICK_PULSE_MS) break;
           pulse = Math.max(pulse, 1 - dt / CLICK_PULSE_MS);

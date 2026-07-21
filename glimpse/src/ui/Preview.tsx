@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
-import { sampleFrame, speedAt } from '../timeline/sampler';
+import { sampleFrame, speedAt, buildTimeline, sourceToOutput } from '../timeline/sampler';
 import { loadRecordingVideo } from '../export/exporter';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -19,6 +19,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   const rendererRef = useRef<GlimpseRenderer | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
+  /** Wall-clock instant playback last started — the music track's own clock,
+   * so it stays independent of video cuts and speed. */
+  const playStartRef = useRef(0);
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
@@ -99,20 +102,23 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
             }
           }
 
-          // Keep the music track in lockstep with the timeline.
+          // The music track is deliberately independent of the video edit —
+          // it plays straight through at 1×, unaffected by cuts or speed. Drive
+          // it from wall-clock elapsed since playback began, not source time.
           const music = current.music;
           const el = musicRef.current;
           if (music && el) {
-            const rel = (tMs - music.offset) / 1000;
-            const active = rel >= 0 && rel < music.duration / 1000;
+            const wall = (performance.now() - playStartRef.current) / 1000;
+            const pos = wall - music.offset / 1000; // music-local seconds
+            const active = pos >= 0 && pos < music.duration / 1000;
             el.volume = music.gain;
-            el.playbackRate = Math.max(0.0625, rate);
+            el.playbackRate = 1;
             if (active) {
               if (el.paused) {
-                el.currentTime = rel;
+                el.currentTime = pos;
                 void el.play();
-              } else if (Math.abs(el.currentTime - rel) > 0.25) {
-                el.currentTime = rel; // drift correction
+              } else if (Math.abs(el.currentTime - pos) > 0.35) {
+                el.currentTime = pos; // drift correction
               }
             } else if (!el.paused) {
               el.pause();
@@ -121,7 +127,7 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         } else if (musicRef.current && !musicRef.current.paused) {
           musicRef.current.pause();
         }
-        renderer.render(sampleFrame(current, tMs));
+        renderer.render(sampleFrame(current, tMs, st.previewRate));
         raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
@@ -158,7 +164,15 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     const video = videoRef.current;
     if (!video) return;
     if (playing) {
-      video.currentTime = useGlimpse.getState().playhead / 1000;
+      const st = useGlimpse.getState();
+      // Anchor the music clock to the playhead's position on the output
+      // timeline, so the (independent) soundtrack lines up where it will on
+      // export regardless of cuts before the playhead.
+      if (st.project) {
+        const outMs = sourceToOutput(buildTimeline(st.project), st.playhead);
+        playStartRef.current = performance.now() - outMs;
+      }
+      video.currentTime = st.playhead / 1000;
       void video.play();
     } else {
       video.pause();

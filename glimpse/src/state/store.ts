@@ -92,6 +92,8 @@ interface GlimpseState {
   addMusic: (file: File) => Promise<void>;
   updateMusic: (patch: Partial<Omit<MusicTrack, 'blob'>>) => void;
   removeMusic: () => void;
+  /** Strip the recording's own captured audio track. */
+  removeRecordedAudio: () => void;
   setPreviewRate: (rate: number) => void;
 
   runExport: () => Promise<void>;
@@ -494,6 +496,15 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     commit({ ...p, music: undefined });
   },
 
+  removeRecordedAudio: () => {
+    const p = get().project;
+    if (!p) return;
+    commit({
+      ...p,
+      recording: { ...p.recording, hasAudio: false, audioBlob: undefined },
+    });
+  },
+
   setPreviewRate: (previewRate) => set({ previewRate }),
 
   runExport: async () => {
@@ -507,6 +518,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
         p,
         (exportProgress) => set({ exportProgress }),
         controller.signal,
+        get().previewRate,
       );
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.${result.extension}`);
     } catch (e) {
@@ -525,7 +537,12 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     exportAbort = controller;
     set({ exporting: true, exportProgress: null, playing: false });
     try {
-      const result = await exportGif(p, (exportProgress) => set({ exportProgress }), controller.signal);
+      const result = await exportGif(
+        p,
+        (exportProgress) => set({ exportProgress }),
+        controller.signal,
+        get().previewRate,
+      );
       downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.gif`);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') throw e;

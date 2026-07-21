@@ -20,7 +20,6 @@ import {
   buildTimeline,
   outputDuration,
   outputToSource,
-  type TimelinePiece,
 } from '../timeline/sampler';
 import { GlimpseRenderer } from '../render/renderer';
 
@@ -38,12 +37,14 @@ export function webCodecsSupported(): boolean {
   return typeof VideoEncoder !== 'undefined';
 }
 
-/** Audio survives export only at uniform 1× speed (no resampling pipeline). */
+/**
+ * Audio is an independent track: it plays straight through at 1×, unaffected
+ * by the timeline's clip speeds, the global playback speed, or cuts. So the
+ * only requirement is that the encoder exists and there's something to encode.
+ */
 export function audioExportable(project: Project): boolean {
   return (
-    (project.recording.hasAudio || !!project.music) &&
-    typeof AudioEncoder !== 'undefined' &&
-    project.zooms.every((z) => (z.speed || 1) === 1)
+    (project.recording.hasAudio || !!project.music) && typeof AudioEncoder !== 'undefined'
   );
 }
 
@@ -102,57 +103,48 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
 }
 
 /**
- * Schedule an audio buffer positioned at `partSrcOffsetMs` on the source
- * timeline across the kept pieces — so cuts drop their audio and the rest
- * joins up, matching the video. Speed is 1 here (audioExportable gate).
+ * Place one audio buffer flat on the output timeline at `whenSec`, at 1× —
+ * no per-piece slicing, so cuts and clip/global speed never touch it.
  */
-function scheduleAcrossPieces(
+function scheduleFlat(
   ctx: OfflineAudioContext,
-  pieces: TimelinePiece[],
   buffer: AudioBuffer,
-  partSrcOffsetMs: number,
+  whenSec: number,
   gain: number,
+  durSec: number,
 ): void {
-  const bufEndSrc = partSrcOffsetMs + buffer.duration * 1000;
-  for (const p of pieces) {
-    const s = Math.max(p.srcStart, partSrcOffsetMs);
-    const e = Math.min(p.srcEnd, bufEndSrc);
-    if (e - s <= 1) continue;
-    const when = (p.outStart + (s - p.srcStart) / p.speed) / 1000;
-    const offset = (s - partSrcOffsetMs) / 1000;
-    const dur = (e - s) / p.speed / 1000;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const g = ctx.createGain();
-    g.gain.value = gain;
-    src.connect(g).connect(ctx.destination);
-    src.start(when, offset, dur);
-  }
+  const when = Math.max(0, whenSec);
+  if (when >= durSec) return;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const g = ctx.createGain();
+  g.gain.value = gain;
+  src.connect(g).connect(ctx.destination);
+  // A negative offset (clip dragged to start before 0) is honoured by skipping
+  // into the buffer.
+  const into = Math.max(0, -whenSec);
+  src.start(when, into, Math.min(buffer.duration - into, durSec - when));
 }
 
 /**
- * Mix recorded audio and imported music into one 48 kHz stereo buffer laid
- * out on the (trimmed, cut) output timeline. OfflineAudioContext handles
- * resampling, offsets and gain in one deterministic pass.
+ * Mix recorded audio and imported music into one 48 kHz stereo buffer. Both
+ * tracks play continuously at 1× — the soundtrack is deliberately independent
+ * of the video edit (cuts, clip speeds, global playback speed).
  */
-async function renderMixedAudio(
-  project: Project,
-  pieces: TimelinePiece[],
-  durSec: number,
-): Promise<AudioBuffer | null> {
+async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
   let any = false;
   if (project.recording.hasAudio) {
     const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
     if (b) {
-      scheduleAcrossPieces(ctx, pieces, b, 0, 1);
+      scheduleFlat(ctx, b, 0, 1, durSec);
       any = true;
     }
   }
   if (project.music) {
     const b = await decodeAudio(project.music.blob);
     if (b) {
-      scheduleAcrossPieces(ctx, pieces, b, project.music.offset, project.music.gain);
+      scheduleFlat(ctx, b, project.music.offset / 1000, project.music.gain, durSec);
       any = true;
     }
   }
@@ -211,16 +203,25 @@ export async function exportProject(
   project: Project,
   onProgress: (p: ExportProgress) => void,
   signal?: AbortSignal,
+  /**
+   * Global playback-speed multiplier (the timeline's speed slider). <1 slows
+   * the whole export down, rendering every intermediate frame; 1 = untouched.
+   */
+  speed = 1,
 ): Promise<ExportResult> {
   if (!webCodecsSupported()) {
-    return exportRealtimeFallback(project, onProgress, signal);
+    return exportRealtimeFallback(project, onProgress, signal, speed);
   }
 
   const { width, height, fps } = project.output;
   // The piece list already encodes trim − cuts − clip speeds; walking it from
   // 0 renders exactly the kept footage, joined up.
   const pieces = buildTimeline(project);
-  const outDurationSec = Math.max(0.001, outputDuration(pieces) / 1000);
+  // The speed slider dilates the whole output timeline: at 0.25× the export
+  // runs 4× longer, so we render 4× the frames and map each back to its
+  // (undilated) instant on the piece timeline.
+  const spd = Math.max(0.01, speed);
+  const outDurationSec = Math.max(0.001, outputDuration(pieces) / 1000) / spd;
   const totalFrames = Math.max(1, Math.floor(outDurationSec * fps));
 
   const canvas = document.createElement('canvas');
@@ -233,8 +234,9 @@ export async function exportProject(
   // render against black textures.
   await renderer.whenReady();
 
+  // Audio is an independent 1× track — unaffected by cuts or speed.
   const withAudio = audioExportable(project);
-  const audio = withAudio ? await renderMixedAudio(project, pieces, outDurationSec) : null;
+  const audio = withAudio ? await renderMixedAudio(project, outDurationSec) : null;
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -286,12 +288,13 @@ export async function exportProject(
   try {
     for (let i = 0; i < totalFrames; i++) {
       if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
-      const tOutMs = (i / fps) * 1000;
+      // Undilate: this output frame's instant on the (un-slowed) piece timeline.
+      const tOutMs = (i / fps) * 1000 * spd;
       let frameSource: HTMLCanvasElement = canvas;
       if (mbSamples === 1 || !accumCtx) {
         const tSrcMs = outputToSource(pieces, tOutMs);
         await seekTo(video, tSrcMs / 1000);
-        renderer.render(sampleFrame(project, tSrcMs));
+        renderer.render(sampleFrame(project, tSrcMs, spd));
       } else {
         accumCtx.globalCompositeOperation = 'source-over';
         accumCtx.globalAlpha = 1;
@@ -303,7 +306,7 @@ export async function exportProject(
           const subOut = Math.max(0, tOutMs + ((m + 0.5) / mbSamples - 0.5) * shutterMs);
           const tSrc = outputToSource(pieces, subOut);
           await seekTo(video, tSrc / 1000);
-          renderer.render(sampleFrame(project, tSrc));
+          renderer.render(sampleFrame(project, tSrc, spd));
           accumCtx.drawImage(canvas, 0, 0);
         }
         accumCtx.globalCompositeOperation = 'source-over';
@@ -356,8 +359,10 @@ export async function exportGif(
   project: Project,
   onProgress: (p: ExportProgress) => void,
   signal?: AbortSignal,
+  speed = 1,
 ): Promise<ExportResult> {
   const GIF_FPS = 15;
+  const spd = Math.max(0.01, speed);
   const MAX_W = 800;
   const aspect = project.output.width / project.output.height;
   const width = Math.min(MAX_W, project.output.width);
@@ -373,7 +378,7 @@ export async function exportGif(
   await renderer.whenReady();
 
   const pieces = buildTimeline(project);
-  const durSec = Math.max(0.001, outputDuration(pieces) / 1000);
+  const durSec = Math.max(0.001, outputDuration(pieces) / 1000) / spd;
   const totalFrames = Math.max(1, Math.floor(durSec * GIF_FPS));
   const delay = Math.round(1000 / GIF_FPS);
 
@@ -386,9 +391,9 @@ export async function exportGif(
   try {
     for (let i = 0; i < totalFrames; i++) {
       if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
-      const tSrc = outputToSource(pieces, (i / GIF_FPS) * 1000);
+      const tSrc = outputToSource(pieces, (i / GIF_FPS) * 1000 * spd);
       await seekTo(video, tSrc / 1000);
-      renderer.render(sampleFrame(project, tSrc));
+      renderer.render(sampleFrame(project, tSrc, spd));
       rctx.drawImage(canvas, 0, 0);
       const { data } = rctx.getImageData(0, 0, width, height);
       const palette = quantize(data, 256);
@@ -439,8 +444,10 @@ async function exportRealtimeFallback(
   project: Project,
   onProgress: (p: ExportProgress) => void,
   signal?: AbortSignal,
+  speed = 1,
 ): Promise<ExportResult> {
   const { width, height, fps } = project.output;
+  const spd = Math.max(0.01, speed);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -459,6 +466,8 @@ async function exportRealtimeFallback(
   const trim = project.trim ?? { start: 0, end: project.recording.duration };
   const totalFrames = Math.max(1, Math.floor(((trim.end - trim.start) / 1000) * fps));
 
+  // Slow the source playback to bake the speed multiplier into realtime capture.
+  video.playbackRate = spd;
   video.currentTime = trim.start / 1000;
   await video.play();
   rec.start(250);
@@ -476,7 +485,7 @@ async function exportRealtimeFallback(
         requestAnimationFrame(tick);
         return;
       }
-      renderer.render(sampleFrame(project, tMs));
+      renderer.render(sampleFrame(project, tMs, spd));
       onProgress({ frame: Math.floor(((tMs - trim.start) / 1000) * fps), totalFrames });
       requestAnimationFrame(tick);
     };

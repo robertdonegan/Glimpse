@@ -237,17 +237,29 @@ export const DEFAULT_STYLE: StyleSettings = {
   blur: [],
 };
 
+/**
+ * Export/preview resolution. Match the recording's native pixels so a crisp
+ * (retina) capture isn't thrown away by downscaling to a fixed 1080p — the
+ * old behaviour, which softened native captures and made edge aliasing show
+ * under 3D tilt. Capped to 4K on the long edge so encodes stay sane, and
+ * rounded to even dimensions (H.264 requires it).
+ */
+function outputDims(width: number, height: number): { width: number; height: number } {
+  const MAX_LONG_EDGE = 3840;
+  const scale = Math.min(1, MAX_LONG_EDGE / Math.max(width, height, 1));
+  const even = (n: number) => Math.max(2, Math.round((n * scale) / 2) * 2);
+  return { width: even(width), height: even(height) };
+}
+
 export function createProject(recording: Recording): Project {
-  const landscape = recording.width >= recording.height;
+  const { width, height } = outputDims(recording.width, recording.height);
   return {
     name: 'Untitled',
     recording,
     zooms: [],
     overlays: [],
     style: structuredClone(DEFAULT_STYLE),
-    output: landscape
-      ? { width: 1920, height: 1080, fps: 60 }
-      : { width: 1080, height: 1920, fps: 60 },
+    output: { width, height, fps: 60 },
     trim: { start: 0, end: recording.duration },
   };
 }

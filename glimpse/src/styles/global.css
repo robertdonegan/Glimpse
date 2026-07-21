@@ -805,31 +805,59 @@ input[type='range']::-moz-range-thumb {
   cursor: crosshair;
 }
 
-/* Recording clip handles: dark end-bars marking the trimmed clip bounds. */
+/* Recording clip handles: chunky end-bars marking the trimmed clip bounds.
+   Both sit fully inside the track (which clips overflow) so each is grabbable:
+   the left one to the right of its edge, the right one to the left of its. */
 .clip-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 8px;
+  width: 12px;
   background: var(--n700);
   cursor: ew-resize;
-  z-index: 4;
+  z-index: 6;
+  transition: background 120ms ease;
 }
 
+.clip-handle:hover {
+  background: var(--n800);
+}
+
+/* Twin grip ridges so the handle reads unmistakably as a drag target. */
+.clip-handle::before,
 .clip-handle::after {
   content: '';
   position: absolute;
   top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translateY(-50%);
   width: 2px;
-  height: 20px;
+  height: 28px;
   border-radius: 1px;
-  background: var(--text-2);
+  background: var(--text-1);
+  opacity: 0.7;
 }
 
+.clip-handle::before {
+  left: 4px;
+}
+
+.clip-handle::after {
+  right: 4px;
+}
+
+.clip-handle:hover::before,
+.clip-handle:hover::after {
+  opacity: 1;
+}
+
+/* Left edge at 0% → push the bar right so it lands inside the track. */
 .clip-handle.left {
-  margin-left: -8px;
+  margin-left: 0;
+}
+
+/* Right edge at 100% → pull the bar left by its own width. */
+.clip-handle.right {
+  margin-left: -12px;
 }
 
 /* Zoom clips: translucent brand boxes with edge grips. */
