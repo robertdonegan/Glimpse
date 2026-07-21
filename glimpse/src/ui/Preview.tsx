@@ -205,9 +205,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    const zoom = panTarget();
     const canvas = canvasRef.current;
-    if (!zoom || !canvas) return;
+    if (!canvas) return;
+    const zoom = panTarget();
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     let last = { x: e.clientX, y: e.clientY };
@@ -217,13 +217,25 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
       const dy = (ev.clientY - last.y) / rect.height;
       last = { x: ev.clientX, y: ev.clientY };
       const st = useGlimpse.getState();
-      const cur = st.project?.zooms.find((z) => z.id === zoom.id);
-      if (!cur) return;
-      const s = Math.max(cur.scale, 1e-3);
-      st.updateZoom(zoom.id, {
-        focusX: clamp01(cur.focusX - dx / s),
-        focusY: clamp01(cur.focusY - dy / s),
-      });
+      if (zoom) {
+        // A zoom under the playhead — drag reframes it.
+        const cur = st.project?.zooms.find((z) => z.id === zoom.id);
+        if (!cur) return;
+        const s = Math.max(cur.scale, 1e-3);
+        st.updateZoom(zoom.id, {
+          focusX: clamp01(cur.focusX - dx / s),
+          focusY: clamp01(cur.focusY - dy / s),
+        });
+      } else {
+        // No zoom — drag repositions the recording within the output frame.
+        const p = st.project;
+        if (!p) return;
+        const pos = p.style.position ?? { x: 0.5, y: 0.5 };
+        st.patchStyle('position', {
+          x: clamp01(pos.x + dx),
+          y: clamp01(pos.y + dy),
+        });
+      }
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
@@ -233,12 +245,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     window.addEventListener('pointerup', up);
   };
 
-  const pannable =
-    !!project &&
-    !!(
-      project.zooms.find((z) => z.id === selectedZoom) ??
-      project.zooms.find((z) => playhead >= z.start && playhead <= z.end)
-    );
+  // The canvas is always draggable: a zoom under the playhead pans, otherwise
+  // the whole recording repositions.
+  const pannable = !!project;
 
   return (
     <div className="preview-wrap">
@@ -246,7 +255,7 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         ref={canvasRef}
         className={`preview-canvas${pannable ? ' pannable' : ''}`}
         onPointerDown={onPointerDown}
-        title={pannable ? 'Drag to pan the zoom framing' : undefined}
+        title="Drag to reposition the recording (or pan a zoom under the playhead)"
       />
     </div>
   );

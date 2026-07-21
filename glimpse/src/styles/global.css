@@ -1323,6 +1323,32 @@ input[type='range']::-moz-range-thumb {
   gap: 6px;
 }
 
+/* 3×3 recording-position picker. */
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 14px);
+  grid-template-rows: repeat(3, 14px);
+  gap: 3px;
+}
+
+.anchor-cell {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--n800);
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+
+.anchor-cell:hover {
+  border-color: var(--brand);
+}
+
+.anchor-cell.on {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
 .gradient-presets {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

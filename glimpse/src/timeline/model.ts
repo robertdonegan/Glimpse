@@ -97,6 +97,12 @@ export interface StyleSettings {
   padding: number;
   /** Corner radius in recording pixels. */
   cornerRadius: number;
+  /** Recording size within the output, as a fraction of the padded fit (0.2–1).
+   * Below 1 it shrinks, opening room to reposition it in a corner. */
+  frameScale: number;
+  /** Recording placement within the output. {0.5,0.5} = centred; x 0=left,
+   * 1=right; y 0=top, 1=bottom. */
+  position: { x: number; y: number };
   shadow: boolean;
   cursor: {
     style: CursorStyle;
@@ -219,6 +225,8 @@ export const DEFAULT_STYLE: StyleSettings = {
   background: { kind: 'gradient', colorA: '#1b2a4a', colorB: '#0b3b39', angle: 35 },
   padding: 0.08,
   cornerRadius: 16,
+  frameScale: 1,
+  position: { x: 0.5, y: 0.5 },
   shadow: true,
   cursor: {
     style: 'default',
@@ -273,6 +281,8 @@ export function normalizeProject(p: Project): Project {
   style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
   style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
   style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
+  style.position = { ...DEFAULT_STYLE.position, ...p.style?.position };
+  style.frameScale = p.style?.frameScale ?? 1;
   style.blur = p.style?.blur ?? [];
   return {
     ...p,

@@ -748,6 +748,11 @@ export class GlimpseRenderer {
       h = this.viewH * pad;
       w = h * recAspect;
     }
+    // Frame scale shrinks the recording within the output, opening slack to
+    // reposition it (see render()).
+    const scale = style.frameScale ?? 1;
+    w *= scale;
+    h *= scale;
     this.planeW = w;
     this.planeH = h;
     this.videoPlane.scale.set(w, h, 1);
@@ -784,11 +789,21 @@ export class GlimpseRenderer {
       THREE.MathUtils.degToRad(pose.rotZ),
     );
 
+    // Base frame placement: shift the whole recording (plane + cursor + shadow
+    // + overlays move together) within the free space its scale leaves. x 0=left
+    // 1=right; y 0=top 1=bottom (world Y is up, so invert).
+    const pos = this.style.position ?? { x: 0.5, y: 0.5 };
+    const viewW = this.viewH * this.camera.aspect;
+    const freeX = Math.max(0, viewW - this.planeW) / 2;
+    const freeY = Math.max(0, this.viewH - this.planeH) / 2;
+    const offX = (pos.x - 0.5) * 2 * freeX;
+    const offY = -(pos.y - 0.5) * 2 * freeY;
+
     const s = camera.scale;
     this.zoomGroup.scale.set(s, s, 1);
     this.zoomGroup.position.set(
-      -(camera.focusX - 0.5) * this.planeW * s,
-      (camera.focusY - 0.5) * this.planeH * s,
+      offX - (camera.focusX - 0.5) * this.planeW * s,
+      offY + (camera.focusY - 0.5) * this.planeH * s,
       0,
     );
 
