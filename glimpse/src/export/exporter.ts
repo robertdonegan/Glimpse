@@ -89,6 +89,40 @@ function seekTo(video: HTMLVideoElement, timeSec: number): Promise<void> {
   });
 }
 
+/**
+ * Land on `timeSec` with a decoded frame actually presented. A plain seek can
+ * resolve without a frame ready (metadata only, or an early-return when already
+ * near the target) — for a one-shot render (PNG still) that uploads a black
+ * VideoTexture. Nudge off the target first so the seek always fires, then wait
+ * for the frame via requestVideoFrameCallback (with a timeout fallback).
+ */
+async function seekToFrame(video: HTMLVideoElement, timeSec: number): Promise<void> {
+  if (Math.abs(video.currentTime - timeSec) < 1 / 120) {
+    // Nudge to a genuinely different instant so the re-seek fires and decodes a
+    // frame — forward near the start (a backward nudge from 0 would be a no-op).
+    await seekTo(video, timeSec < 0.1 ? timeSec + 0.06 : timeSec - 0.06);
+  }
+  await seekTo(video, timeSec);
+  const rvfc = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: () => void) => number;
+  };
+  if (typeof rvfc.requestVideoFrameCallback === 'function') {
+    await new Promise<void>((res) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        res();
+      };
+      const t = setTimeout(finish, 200);
+      rvfc.requestVideoFrameCallback!(() => {
+        clearTimeout(t);
+        finish();
+      });
+    });
+  }
+}
+
 /** Decode the recording's audio track to PCM. Null if decode fails. */
 async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
   try {
@@ -104,7 +138,8 @@ async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
 
 /**
  * Place one audio buffer flat on the output timeline at `whenSec`, at 1× —
- * no per-piece slicing, so cuts and clip/global speed never touch it.
+ * no per-piece slicing, so cuts and clip/global speed never touch it. `intoSec`
+ * skips into the buffer (e.g. to honour the trim in-point).
  */
 function scheduleFlat(
   ctx: OfflineAudioContext,
@@ -112,6 +147,7 @@ function scheduleFlat(
   whenSec: number,
   gain: number,
   durSec: number,
+  intoSec = 0,
 ): void {
   const when = Math.max(0, whenSec);
   if (when >= durSec) return;
@@ -120,31 +156,39 @@ function scheduleFlat(
   const g = ctx.createGain();
   g.gain.value = gain;
   src.connect(g).connect(ctx.destination);
-  // A negative offset (clip dragged to start before 0) is honoured by skipping
-  // into the buffer.
-  const into = Math.max(0, -whenSec);
-  src.start(when, into, Math.min(buffer.duration - into, durSec - when));
+  // Skip into the buffer for the trim in-point, plus any negative when (clip
+  // dragged to start before 0).
+  const into = Math.max(0, intoSec) + Math.max(0, -whenSec);
+  const playable = buffer.duration - into;
+  if (playable <= 0) return;
+  src.start(when, into, Math.min(playable, durSec - when));
 }
 
 /**
  * Mix recorded audio and imported music into one 48 kHz stereo buffer. Both
- * tracks play continuously at 1× — the soundtrack is deliberately independent
- * of the video edit (cuts, clip speeds, global playback speed).
+ * tracks play at 1×, independent of cuts and speed, but bounded by the trim:
+ * playback starts at the trim in-point and can't run past the trimmed span.
  */
 async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
+  const trimStart = (project.trim?.start ?? 0) / 1000;
+  const trimEnd = (project.trim?.end ?? project.recording.duration) / 1000;
+  // Audio never plays longer than the trimmed span (nor the output).
+  const audioDur = Math.min(durSec, Math.max(0, trimEnd - trimStart));
   let any = false;
   if (project.recording.hasAudio) {
     const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
     if (b) {
-      scheduleFlat(ctx, b, 0, 1, durSec);
+      // Recorded audio is locked to the frames: start at the trim in-point.
+      scheduleFlat(ctx, b, 0, 1, audioDur, trimStart);
       any = true;
     }
   }
   if (project.music) {
     const b = await decodeAudio(project.music.blob);
     if (b) {
-      scheduleFlat(ctx, b, project.music.offset / 1000, project.music.gain, durSec);
+      // Music sits at its own offset, measured from the trim in-point.
+      scheduleFlat(ctx, b, project.music.offset / 1000 - trimStart, project.music.gain, audioDur);
       any = true;
     }
   }
@@ -233,6 +277,8 @@ export async function exportProject(
   // Backdrop / overlay bitmaps decode async — wait for them or the first frames
   // render against black textures.
   await renderer.whenReady();
+  // Prime the decoder so the very first frame isn't a black VideoTexture.
+  await seekToFrame(video, outputToSource(pieces, 0) / 1000);
 
   // Audio is an independent 1× track — unaffected by cuts or speed.
   const withAudio = audioExportable(project);
@@ -378,6 +424,7 @@ export async function exportGif(
   await renderer.whenReady();
 
   const pieces = buildTimeline(project);
+  await seekToFrame(video, outputToSource(pieces, 0) / 1000); // prime the decoder
   const durSec = Math.max(0.001, outputDuration(pieces) / 1000) / spd;
   const totalFrames = Math.max(1, Math.floor(durSec * GIF_FPS));
   const delay = Math.round(1000 / GIF_FPS);
@@ -428,7 +475,7 @@ export async function exportStill(project: Project, tMs: number, scale = 2): Pro
   try {
     renderer.attachVideo(video);
     await renderer.whenReady();
-    await seekTo(video, tMs / 1000);
+    await seekToFrame(video, tMs / 1000);
     renderer.render(sampleFrame(project, tMs));
     return await new Promise<Blob>((res, rej) =>
       canvas.toBlob((b) => (b ? res(b) : rej(new Error('PNG encode failed'))), 'image/png'),

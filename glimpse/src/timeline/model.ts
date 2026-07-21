@@ -97,6 +97,12 @@ export interface StyleSettings {
   padding: number;
   /** Corner radius in recording pixels. */
   cornerRadius: number;
+  /** Recording size within the output, as a fraction of the padded fit (0.2–1).
+   * Below 1 it shrinks, opening room to reposition it in a corner. */
+  frameScale: number;
+  /** Recording placement within the output. {0.5,0.5} = centred; x 0=left,
+   * 1=right; y 0=top, 1=bottom. */
+  position: { x: number; y: number };
   shadow: boolean;
   cursor: {
     style: CursorStyle;
@@ -111,6 +117,9 @@ export interface StyleSettings {
     color: string;
     /** Ease the cursor back to its start position at the end — seamless loops. */
     returnToStart: boolean;
+    /** Glide the cursor across cut boundaries instead of jumping — for
+     * continuity when sections are removed. */
+    bridgeCuts: boolean;
   };
   /** Static 3D pose for hero shots, degrees. */
   pose: { rotX: number; rotY: number; rotZ: number };
@@ -219,6 +228,8 @@ export const DEFAULT_STYLE: StyleSettings = {
   background: { kind: 'gradient', colorA: '#1b2a4a', colorB: '#0b3b39', angle: 35 },
   padding: 0.08,
   cornerRadius: 16,
+  frameScale: 1,
+  position: { x: 0.5, y: 0.5 },
   shadow: true,
   cursor: {
     style: 'default',
@@ -228,6 +239,7 @@ export const DEFAULT_STYLE: StyleSettings = {
     handOnHover: true,
     color: '#111111',
     returnToStart: false,
+    bridgeCuts: false,
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
@@ -273,6 +285,8 @@ export function normalizeProject(p: Project): Project {
   style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
   style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
   style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
+  style.position = { ...DEFAULT_STYLE.position, ...p.style?.position };
+  style.frameScale = p.style?.frameScale ?? 1;
   style.blur = p.style?.blur ?? [];
   return {
     ...p,

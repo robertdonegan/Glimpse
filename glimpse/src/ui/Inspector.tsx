@@ -274,6 +274,17 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
                 title="Ease the cursor back to its opening position at the end — for seamless loops"
               />
             </div>
+            <div className="row">
+              <label>Glide across cuts</label>
+              <input
+                type="checkbox"
+                checked={style.cursor.bridgeCuts}
+                onChange={(e) =>
+                  patchStyle('cursor', { ...style.cursor, bridgeCuts: e.target.checked })
+                }
+                title="Ease the cursor between cut sections instead of jumping — for continuity"
+              />
+            </div>
           </>
         ) : (
           <p className="hint">
@@ -306,6 +317,55 @@ export function Inspector({ selectedZoom }: { selectedZoom: string | null }) {
           step={1}
           format={(v) => `${v}px`}
           onChange={(v) => patchStyle('cornerRadius', v)}
+        />
+        <SliderRow
+          label="Size"
+          value={style.frameScale ?? 1}
+          min={0.2}
+          max={1}
+          step={0.01}
+          format={(v) => `${Math.round(v * 100)}%`}
+          parse={(n) => n / 100}
+          onChange={(v) => patchStyle('frameScale', v)}
+        />
+        <div className="row" style={{ alignItems: 'flex-start' }}>
+          <label>Position</label>
+          <div className="anchor-grid" role="group" aria-label="Recording position">
+            {[0, 0.5, 1].map((py) =>
+              [0, 0.5, 1].map((px) => {
+                const pos = style.position ?? { x: 0.5, y: 0.5 };
+                const on = Math.abs(pos.x - px) < 0.01 && Math.abs(pos.y - py) < 0.01;
+                return (
+                  <button
+                    key={`${px}-${py}`}
+                    className={`anchor-cell${on ? ' on' : ''}`}
+                    aria-label={`Position ${px},${py}`}
+                    onClick={() => patchStyle('position', { x: px, y: py })}
+                  />
+                );
+              }),
+            )}
+          </div>
+        </div>
+        <SliderRow
+          label="X"
+          value={style.position?.x ?? 0.5}
+          min={0}
+          max={1}
+          step={0.01}
+          format={(v) => `${Math.round(v * 100)}%`}
+          parse={(n) => n / 100}
+          onChange={(v) => patchStyle('position', { ...(style.position ?? { x: 0.5, y: 0.5 }), x: v })}
+        />
+        <SliderRow
+          label="Y"
+          value={style.position?.y ?? 0.5}
+          min={0}
+          max={1}
+          step={0.01}
+          format={(v) => `${Math.round(v * 100)}%`}
+          parse={(n) => n / 100}
+          onChange={(v) => patchStyle('position', { ...(style.position ?? { x: 0.5, y: 0.5 }), y: v })}
         />
         <div className="row">
           <label>Shadow</label>

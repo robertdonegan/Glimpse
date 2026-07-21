@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGlimpse } from '../state/store';
 import { GlimpseRenderer } from '../render/renderer';
-import { sampleFrame, speedAt, buildTimeline, sourceToOutput } from '../timeline/sampler';
+import { sampleFrame, speedAt } from '../timeline/sampler';
 import { loadRecordingVideo } from '../export/exporter';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -22,6 +22,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   /** Wall-clock instant playback last started — the music track's own clock,
    * so it stays independent of video cuts and speed. */
   const playStartRef = useRef(0);
+  /** True once the music element has been started for this play session, so the
+   * loop never re-seeks or re-triggers it mid-clip (which stuttered). */
+  const musicStartedRef = useRef(false);
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
@@ -92,40 +95,45 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
           // preview-only slow-viewing rate.
           const rate = speedAt(current.zooms, tMs) * st.previewRate;
           video.playbackRate = rate;
+          const trimStart = current.trim?.start ?? 0;
           const trimEnd = current.trim?.end ?? current.recording.duration;
           if (video.ended || tMs >= trimEnd) {
             if (st.loop) {
-              video.currentTime = (current.trim?.start ?? 0) / 1000;
+              video.currentTime = trimStart / 1000;
               void video.play();
+              // Restart the music clock with the video so the soundtrack loops
+              // too instead of running on past the out-point.
+              playStartRef.current = performance.now();
+              musicStartedRef.current = false;
             } else {
               st.setPlaying(false);
             }
           }
 
-          // The music track is deliberately independent of the video edit —
-          // it plays straight through at 1×, unaffected by cuts or speed. Drive
-          // it from wall-clock elapsed since playback began, not source time.
+          // The music track plays at 1×, independent of cuts and speed, but
+          // bounded by the trim: its clock is anchored to the trim in-point and
+          // restarts on loop. Start it once, then let it play natively —
+          // re-seeking a compressed audio element every frame stuttered.
           const music = current.music;
           const el = musicRef.current;
           if (music && el) {
-            const wall = (performance.now() - playStartRef.current) / 1000;
-            const pos = wall - music.offset / 1000; // music-local seconds
+            const pos =
+              (trimStart + (performance.now() - playStartRef.current) - music.offset) / 1000;
             const active = pos >= 0 && pos < music.duration / 1000;
             el.volume = music.gain;
             el.playbackRate = 1;
-            if (active) {
-              if (el.paused) {
-                el.currentTime = pos;
-                void el.play();
-              } else if (Math.abs(el.currentTime - pos) > 0.35) {
-                el.currentTime = pos; // drift correction
-              }
-            } else if (!el.paused) {
+            if (active && !musicStartedRef.current) {
+              el.currentTime = Math.max(0, pos); // seek once, on (re)start only
+              void el.play();
+              musicStartedRef.current = true;
+            } else if (!active && musicStartedRef.current) {
               el.pause();
+              musicStartedRef.current = false;
             }
           }
-        } else if (musicRef.current && !musicRef.current.paused) {
-          musicRef.current.pause();
+        } else if (musicRef.current) {
+          if (!musicRef.current.paused) musicRef.current.pause();
+          musicStartedRef.current = false; // fresh start next time play begins
         }
         renderer.render(sampleFrame(current, tMs, st.previewRate));
         raf = requestAnimationFrame(loop);
@@ -165,13 +173,11 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     if (!video) return;
     if (playing) {
       const st = useGlimpse.getState();
-      // Anchor the music clock to the playhead's position on the output
-      // timeline, so the (independent) soundtrack lines up where it will on
-      // export regardless of cuts before the playhead.
-      if (st.project) {
-        const outMs = sourceToOutput(buildTimeline(st.project), st.playhead);
-        playStartRef.current = performance.now() - outMs;
-      }
+      // Anchor the music clock to real time elapsed since the trim in-point, so
+      // the soundtrack (independent of cuts/speed) starts in the right place.
+      const trimStart = st.project?.trim?.start ?? 0;
+      playStartRef.current = performance.now() - (st.playhead - trimStart);
+      musicStartedRef.current = false; // start the music fresh for this session
       video.currentTime = st.playhead / 1000;
       void video.play();
     } else {
@@ -199,9 +205,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    const zoom = panTarget();
     const canvas = canvasRef.current;
-    if (!zoom || !canvas) return;
+    if (!canvas) return;
+    const zoom = panTarget();
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     let last = { x: e.clientX, y: e.clientY };
@@ -211,13 +217,25 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
       const dy = (ev.clientY - last.y) / rect.height;
       last = { x: ev.clientX, y: ev.clientY };
       const st = useGlimpse.getState();
-      const cur = st.project?.zooms.find((z) => z.id === zoom.id);
-      if (!cur) return;
-      const s = Math.max(cur.scale, 1e-3);
-      st.updateZoom(zoom.id, {
-        focusX: clamp01(cur.focusX - dx / s),
-        focusY: clamp01(cur.focusY - dy / s),
-      });
+      if (zoom) {
+        // A zoom under the playhead — drag reframes it.
+        const cur = st.project?.zooms.find((z) => z.id === zoom.id);
+        if (!cur) return;
+        const s = Math.max(cur.scale, 1e-3);
+        st.updateZoom(zoom.id, {
+          focusX: clamp01(cur.focusX - dx / s),
+          focusY: clamp01(cur.focusY - dy / s),
+        });
+      } else {
+        // No zoom — drag repositions the recording within the output frame.
+        const p = st.project;
+        if (!p) return;
+        const pos = p.style.position ?? { x: 0.5, y: 0.5 };
+        st.patchStyle('position', {
+          x: clamp01(pos.x + dx),
+          y: clamp01(pos.y + dy),
+        });
+      }
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
@@ -227,12 +245,9 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
     window.addEventListener('pointerup', up);
   };
 
-  const pannable =
-    !!project &&
-    !!(
-      project.zooms.find((z) => z.id === selectedZoom) ??
-      project.zooms.find((z) => playhead >= z.start && playhead <= z.end)
-    );
+  // The canvas is always draggable: a zoom under the playhead pans, otherwise
+  // the whole recording repositions.
+  const pannable = !!project;
 
   return (
     <div className="preview-wrap">
@@ -240,7 +255,7 @@ export function Preview({ selectedZoom }: { selectedZoom: string | null }) {
         ref={canvasRef}
         className={`preview-canvas${pannable ? ' pannable' : ''}`}
         onPointerDown={onPointerDown}
-        title={pannable ? 'Drag to pan the zoom framing' : undefined}
+        title="Drag to reposition the recording (or pan a zoom under the playhead)"
       />
     </div>
   );
