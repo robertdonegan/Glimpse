@@ -89,7 +89,13 @@ export interface ZoomSegment {
   pose?: { rotX: number; rotY: number; rotZ: number };
 }
 
-export type CursorStyle = 'default' | 'circle' | 'none';
+export type CursorStyle =
+  | 'default'
+  | 'circle'
+  | 'text'
+  | 'crosshair'
+  | 'custom'
+  | 'none';
 
 export interface StyleSettings {
   background: BackgroundSettings;
@@ -120,6 +126,10 @@ export interface StyleSettings {
     /** Glide the cursor across cut boundaries instead of jumping — for
      * continuity when sections are removed. */
     bridgeCuts: boolean;
+    /** Custom cursor image (data URL) — used when style is 'custom'. */
+    image?: string;
+    /** Name badge trailing the cursor; empty = off. */
+    badge: string;
   };
   /** Static 3D pose for hero shots, degrees. */
   pose: { rotX: number; rotY: number; rotZ: number };
@@ -133,6 +143,8 @@ export interface StyleSettings {
    */
   spotlight: {
     enabled: boolean;
+    /** Radial pool, or a horizontal lit band. */
+    shape: 'pool' | 'band';
     /** Track the recorded cursor instead of the fixed x/y. */
     follow: boolean;
     x: number;
@@ -147,6 +159,21 @@ export interface StyleSettings {
    * multiplies render time and heat.
    */
   motionBlur: { enabled: boolean; amount: number };
+  /**
+   * Screen-space blur fixed to the output frame (not the recording): a soft
+   * gradient blur from an edge (bottom/top) or a sharp tilt-shift band. Pinned
+   * to the frame, so it survives 3D tilt and zoom.
+   */
+  screenBlur: {
+    enabled: boolean;
+    mode: 'bottom' | 'top' | 'band';
+    /** Blur strength, 0–1. */
+    amount: number;
+    /** Edge/band position as a fraction of the frame height (0 top … 1 bottom). */
+    position: number;
+  };
+  /** Rim / specular highlight along the recording's edge. */
+  rimLight: { enabled: boolean; strength: number };
   /**
    * Redaction: blurred rectangles pinned to the recording (normalised x,y from
    * top-left, w,h as fractions) — hides sensitive info, tilts/zooms with the
@@ -169,12 +196,21 @@ export interface BackgroundSettings {
   imageData?: string;
 }
 
-/** An imported graphic (SVG/PNG/…) composited over the recording. */
+/** A graphic (imported image) or a styled text caption composited over the
+ * recording. */
 export interface Overlay {
   id: string;
   name: string;
-  /** Data-URL of the source image. */
+  /** 'image' (default) or 'text'. */
+  kind?: 'image' | 'text';
+  /** Data-URL of the source image (image overlays). */
   imageData: string;
+  /** Text content (text overlays). */
+  text?: string;
+  /** Text colour. */
+  color?: string;
+  /** Draw a rounded background behind the text. */
+  background?: boolean;
   /** Normalised centre position on the recording. */
   x: number;
   y: number;
@@ -240,12 +276,23 @@ export const DEFAULT_STYLE: StyleSettings = {
     color: '#111111',
     returnToStart: false,
     bridgeCuts: false,
+    badge: '',
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
   keystrokes: { enabled: false },
-  spotlight: { enabled: false, follow: true, x: 0.5, y: 0.5, radius: 0.26, strength: 0.7 },
+  spotlight: {
+    enabled: false,
+    shape: 'pool',
+    follow: true,
+    x: 0.5,
+    y: 0.5,
+    radius: 0.26,
+    strength: 0.7,
+  },
   motionBlur: { enabled: false, amount: 0.5 },
+  screenBlur: { enabled: false, mode: 'bottom', amount: 0.5, position: 0.8 },
+  rimLight: { enabled: false, strength: 0.5 },
   blur: [],
 };
 
@@ -284,7 +331,10 @@ export function normalizeProject(p: Project): Project {
   style.background = { ...DEFAULT_STYLE.background, ...p.style?.background };
   style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
   style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
+  style.spotlight.shape = p.style?.spotlight?.shape ?? 'pool';
   style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
+  style.screenBlur = { ...DEFAULT_STYLE.screenBlur, ...p.style?.screenBlur };
+  style.rimLight = { ...DEFAULT_STYLE.rimLight, ...p.style?.rimLight };
   style.position = { ...DEFAULT_STYLE.position, ...p.style?.position };
   style.frameScale = p.style?.frameScale ?? 1;
   style.blur = p.style?.blur ?? [];

@@ -133,6 +133,7 @@ export function Inspector({
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const removeZoom = useGlimpse((s) => s.removeZoom);
   const addOverlay = useGlimpse((s) => s.addOverlay);
+  const addTextOverlay = useGlimpse((s) => s.addTextOverlay);
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const addMusic = useGlimpse((s) => s.addMusic);
@@ -149,6 +150,7 @@ export function Inspector({
   const backdropInput = useRef<HTMLInputElement>(null);
   const overlayInput = useRef<HTMLInputElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
+  const cursorInput = useRef<HTMLInputElement>(null);
 
   if (!project) return null;
   const { style, recording } = project;
@@ -220,9 +222,65 @@ export function Inspector({
               >
                 <option value="default">Pointer</option>
                 <option value="circle">Circle</option>
+                <option value="text">Text (I-beam)</option>
+                <option value="crosshair">Crosshair</option>
+                <option value="custom">Custom image…</option>
                 <option value="none">Hidden</option>
               </select>
               </span>
+            </div>
+            {style.cursor.style === 'custom' && (
+              <div className="row">
+                <label>Image</label>
+                <div className="seg-row">
+                  <button className="chip" onClick={() => cursorInput.current?.click()}>
+                    {style.cursor.image ? 'Replace…' : 'Upload…'}
+                  </button>
+                  {style.cursor.image && (
+                    <button
+                      className="chip"
+                      onClick={() =>
+                        patchStyle('cursor', { ...style.cursor, image: undefined })
+                      }
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={cursorInput}
+                  type="file"
+                  accept="image/*,.svg"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      const reader = new FileReader();
+                      reader.onload = () =>
+                        patchStyle('cursor', {
+                          ...style.cursor,
+                          image: reader.result as string,
+                        });
+                      reader.readAsDataURL(f);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            )}
+            <div className="row">
+              <label>Name badge</label>
+              <input
+                type="text"
+                className="frame-url"
+                style={{ height: 24, fontSize: 13 }}
+                value={style.cursor.badge}
+                placeholder="e.g. Alex"
+                onChange={(e) =>
+                  patchStyle('cursor', { ...style.cursor, badge: e.target.value })
+                }
+                aria-label="Cursor name badge"
+              />
             </div>
             <SliderRow
               label="Size"
@@ -559,6 +617,23 @@ export function Inspector({
         {style.spotlight.enabled && (
           <>
             <div className="row">
+              <label>Shape</label>
+              <span className="select-wrap">
+                <select
+                  value={style.spotlight.shape}
+                  onChange={(e) =>
+                    patchStyle('spotlight', {
+                      ...style.spotlight,
+                      shape: e.target.value as 'pool' | 'band',
+                    })
+                  }
+                >
+                  <option value="pool">Radial pool</option>
+                  <option value="band">Horizontal band</option>
+                </select>
+              </span>
+            </div>
+            <div className="row">
               <label>Follow cursor</label>
               <input
                 type="checkbox"
@@ -642,6 +717,84 @@ export function Inspector({
               Renders extra sub-frames per frame — smoother motion, but export
               runs several times slower and hotter. Affects export only.
             </p>
+          </>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Rim light</label>
+          <input
+            type="checkbox"
+            checked={style.rimLight.enabled}
+            onChange={(e) =>
+              patchStyle('rimLight', { ...style.rimLight, enabled: e.target.checked })
+            }
+            title="A specular highlight along the recording's edge"
+          />
+        </div>
+        {style.rimLight.enabled && (
+          <SliderRow
+            label="Strength"
+            value={style.rimLight.strength}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            parse={(n) => n / 100}
+            onChange={(v) => patchStyle('rimLight', { ...style.rimLight, strength: v })}
+          />
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <label>Screen blur</label>
+          <input
+            type="checkbox"
+            checked={style.screenBlur.enabled}
+            onChange={(e) =>
+              patchStyle('screenBlur', { ...style.screenBlur, enabled: e.target.checked })
+            }
+            title="Soft blur fixed to the output frame — a Framer-style edge fade or a tilt-shift band"
+          />
+        </div>
+        {style.screenBlur.enabled && (
+          <>
+            <div className="row">
+              <label>Mode</label>
+              <span className="select-wrap">
+                <select
+                  value={style.screenBlur.mode}
+                  onChange={(e) =>
+                    patchStyle('screenBlur', {
+                      ...style.screenBlur,
+                      mode: e.target.value as 'bottom' | 'top' | 'band',
+                    })
+                  }
+                >
+                  <option value="bottom">Bottom fade</option>
+                  <option value="top">Top fade</option>
+                  <option value="band">Tilt-shift band</option>
+                </select>
+              </span>
+            </div>
+            <SliderRow
+              label="Amount"
+              value={style.screenBlur.amount}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('screenBlur', { ...style.screenBlur, amount: v })}
+            />
+            <SliderRow
+              label="Position"
+              value={style.screenBlur.position}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('screenBlur', { ...style.screenBlur, position: v })}
+            />
           </>
         )}
 
@@ -1017,12 +1170,17 @@ export function Inspector({
         <summary>
           Overlays &amp; idents <Icon name="chevron-down" size={12} />
         </summary>
-        <button className="chip" onClick={() => overlayInput.current?.click()}>
-          Add graphic (SVG, PNG…)
-        </button>
+        <div className="seg-row">
+          <button className="chip" onClick={() => overlayInput.current?.click()}>
+            Add graphic
+          </button>
+          <button className="chip" onClick={() => addTextOverlay()}>
+            Add text
+          </button>
+        </div>
         <p className="hint" style={{ marginTop: 6 }}>
-          Toggle “Flat ident” on a graphic to pin it over the whole frame,
-          unaffected by tilt or zoom — for titles and logos.
+          Toggle “Flat ident” to pin over the whole frame, unaffected by tilt or
+          zoom — for titles and logos.
         </p>
         <input
           ref={overlayInput}
@@ -1045,6 +1203,37 @@ export function Inspector({
                 ×
               </button>
             </div>
+            {o.kind === 'text' && (
+              <>
+                <div className="row">
+                  <label>Text</label>
+                  <input
+                    type="text"
+                    className="frame-url"
+                    style={{ height: 24, fontSize: 13 }}
+                    value={o.text ?? ''}
+                    onChange={(e) => updateOverlay(o.id, { text: e.target.value })}
+                    aria-label="Overlay text"
+                  />
+                </div>
+                <div className="row">
+                  <label>Colour</label>
+                  <input
+                    type="color"
+                    value={o.color ?? '#ffffff'}
+                    onChange={(e) => updateOverlay(o.id, { color: e.target.value })}
+                    aria-label="Text colour"
+                  />
+                  <label style={{ marginLeft: 'auto' }}>Backing</label>
+                  <input
+                    type="checkbox"
+                    checked={!!o.background}
+                    onChange={(e) => updateOverlay(o.id, { background: e.target.checked })}
+                    title="Rounded background behind the text"
+                  />
+                </div>
+              </>
+            )}
             <div className="row">
               <label>Flat ident</label>
               <input

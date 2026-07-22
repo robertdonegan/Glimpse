@@ -91,6 +91,7 @@ const VIDEO_FRAG = /* glsl */ `
   uniform float radius;     // world units
   uniform float dofAmount;  // world blur radius per world unit of defocus; 0 = off
   uniform float focusDist;  // world units from camera
+  uniform float rim;        // rim/specular highlight strength; 0 = off
 
   // Rounded-rect SDF for corner masking. AA width is a small fixed fraction of
   // the plane — NOT fwidth(): this is called from inside the bokeh loop (below
@@ -105,13 +106,28 @@ const VIDEO_FRAG = /* glsl */ `
     return 1.0 - smoothstep(-aa, aa, dist);
   }
 
+  // Rim/specular: a bright band just inside the rounded edge, as if a light
+  // catches the screen's bevel.
+  float rimGlow() {
+    if (rim < 0.001) return 0.0;
+    vec2 p = (vUv - 0.5) * planeSize;
+    vec2 b = planeSize * 0.5 - vec2(radius);
+    vec2 d = abs(p) - b;
+    float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+    float w = 0.02 * min(planeSize.x, planeSize.y);
+    // Peak near the edge, fading inward.
+    float band = smoothstep(-w, -w * 0.2, dist) * (1.0 - smoothstep(-w * 0.2, 0.0, dist));
+    return rim * band;
+  }
+
   void main() {
     float coc = dofAmount * abs(vViewZ - focusDist); // circle of confusion, world units
     coc = min(coc, 0.5);
+    float glow = rimGlow();
 
     if (coc < 0.002) {
       vec4 c = texture2D(map, vUv);
-      gl_FragColor = vec4(c.rgb, rectAlpha(vUv));
+      gl_FragColor = vec4(c.rgb + glow, rectAlpha(vUv));
       return;
     }
 
@@ -130,7 +146,7 @@ const VIDEO_FRAG = /* glsl */ `
       acc += texture2D(map, uv).rgb;
       accA += rectAlpha(uv);
     }
-    gl_FragColor = vec4(acc / float(TAPS + 1), accA / float(TAPS + 1));
+    gl_FragColor = vec4(acc / float(TAPS + 1) + glow, accA / float(TAPS + 1));
   }
 `;
 
@@ -171,12 +187,64 @@ const SPOT_FRAG = /* glsl */ `
   uniform float radius;
   uniform float strength;
   uniform float aspect;
+  uniform float band;   // 0 = radial pool, 1 = horizontal band
   void main() {
     vec2 d = vUv - center;
     d.x *= aspect;
-    float dist = length(d);
+    // Band mode lights a horizontal stripe (distance on Y only).
+    float dist = band > 0.5 ? abs(vUv.y - center.y) : length(d);
     float t = smoothstep(radius, radius * 1.9, dist);
     gl_FragColor = vec4(0.0, 0.0, 0.0, t * strength);
+  }
+`;
+
+// Fullscreen post pass: a screen-space blur whose radius is masked by a
+// vertical gradient (bottom/top edge) or a tilt-shift band. Pinned to the
+// output frame, independent of the recording's 3D transform.
+const POST_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const POST_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D tDiffuse;
+  uniform vec2 texel;
+  uniform float maxBlur;   // px
+  uniform int mode;        // 1 = bottom, 2 = band (tilt-shift), 3 = top
+  uniform float pos;       // 0..1 across the frame height (0 = bottom in UV)
+  uniform float feather;
+
+  float maskAmount() {
+    if (mode == 2) {
+      // Tilt-shift: sharp at pos, blur away above and below.
+      return smoothstep(feather, feather * 2.4, abs(vUv.y - pos));
+    } else if (mode == 3) {
+      // Top edge.
+      return smoothstep(pos - feather, pos, vUv.y);
+    }
+    // Bottom edge (default).
+    return 1.0 - smoothstep(pos - feather, pos, vUv.y);
+  }
+
+  void main() {
+    float a = maskAmount();
+    if (a < 0.01 || maxBlur < 0.5) {
+      gl_FragColor = texture2D(tDiffuse, vUv);
+      return;
+    }
+    float r = a * maxBlur;
+    const int N = 16;
+    vec4 acc = texture2D(tDiffuse, vUv);
+    for (int i = 0; i < N; i++) {
+      float ang = 2.399963 * float(i);
+      float rad = sqrt((float(i) + 0.5) / float(N)) * r;
+      acc += texture2D(tDiffuse, vUv + vec2(cos(ang), sin(ang)) * rad * texel);
+    }
+    gl_FragColor = acc / float(N + 1);
   }
 `;
 
@@ -196,13 +264,15 @@ function makeShadowTexture(): THREE.Texture {
   return tex;
 }
 
-type CursorTexKind = 'default' | 'circle' | 'hand';
+type CursorTexKind = 'default' | 'circle' | 'hand' | 'text' | 'crosshair';
 
 /** Texture anchor (0..1, y from bottom) per cursor art — the hotspot. */
 const CURSOR_HOTSPOT: Record<CursorTexKind, [number, number]> = {
   default: [0.23, 0.86],
   circle: [0.5, 0.5],
   hand: [0.44, 0.9],
+  text: [0.5, 0.5],
+  crosshair: [0.5, 0.5],
 };
 
 /** Outline colour that reads against the fill. */
@@ -233,6 +303,48 @@ function makeCursorTexture(kind: CursorTexKind, color: string): THREE.Texture {
     ctx.strokeStyle = outline;
     ctx.lineWidth = s * 0.04;
     ctx.stroke();
+  } else if (kind === 'text') {
+    // I-beam text cursor.
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = s * 0.05;
+    ctx.lineCap = 'round';
+    const m = s / 2;
+    ctx.beginPath();
+    ctx.moveTo(m, s * 0.2);
+    ctx.lineTo(m, s * 0.8);
+    ctx.moveTo(m - s * 0.11, s * 0.2);
+    ctx.lineTo(m + s * 0.11, s * 0.2);
+    ctx.moveTo(m - s * 0.11, s * 0.8);
+    ctx.lineTo(m + s * 0.11, s * 0.8);
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = s * 0.09;
+    ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = s * 0.05;
+    ctx.stroke();
+    ctx.restore();
+  } else if (kind === 'crosshair') {
+    ctx.save();
+    ctx.lineCap = 'round';
+    const m = s / 2;
+    const draw = (col: string, w: number) => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(m, s * 0.16);
+      ctx.lineTo(m, s * 0.4);
+      ctx.moveTo(m, s * 0.6);
+      ctx.lineTo(m, s * 0.84);
+      ctx.moveTo(s * 0.16, m);
+      ctx.lineTo(s * 0.4, m);
+      ctx.moveTo(s * 0.6, m);
+      ctx.lineTo(s * 0.84, m);
+      ctx.stroke();
+    };
+    draw(outline, s * 0.075);
+    draw(color, s * 0.04);
+    ctx.restore();
   } else if (kind === 'hand') {
     // Pointing hand, OS style.
     const path = new Path2D(
@@ -327,6 +439,54 @@ function makeKeycapTexture(label: string): { tex: THREE.Texture; aspect: number 
   return { tex, aspect: w / h };
 }
 
+/** Render a styled text caption (multi-line) into a texture. */
+function makeTextTexture(
+  text: string,
+  color: string,
+  background: boolean,
+): { tex: THREE.Texture; aspect: number } {
+  const fontSize = 90;
+  const lineGap = fontSize * 0.28;
+  const font = `600 ${fontSize}px 'IBM Plex Sans', system-ui, sans-serif`;
+  const lines = (text || ' ').split('\n');
+  const meas = document.createElement('canvas').getContext('2d')!;
+  meas.font = font;
+  const textW = Math.max(1, ...lines.map((l) => Math.ceil(meas.measureText(l || ' ').width)));
+  const textH = lines.length * fontSize + (lines.length - 1) * lineGap;
+  const padX = background ? fontSize * 0.5 : fontSize * 0.16;
+  const padY = background ? fontSize * 0.32 : fontSize * 0.16;
+  const w = textW + padX * 2;
+  const h = textH + padY * 2;
+  const cv = document.createElement('canvas');
+  cv.width = Math.ceil(w);
+  cv.height = Math.ceil(h);
+  const ctx = cv.getContext('2d')!;
+  if (background) {
+    const r = h * 0.16;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, w, h, r);
+    ctx.fillStyle = 'rgba(15,17,22,0.72)';
+    ctx.fill();
+  }
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (!background) {
+    // Soft shadow so text reads over any content.
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = fontSize * 0.14;
+  }
+  ctx.fillStyle = color || '#ffffff';
+  lines.forEach((line, i) => {
+    const y = padY + fontSize / 2 + i * (fontSize + lineGap);
+    ctx.fillText(line, w / 2, y);
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return { tex, aspect: w / h };
+}
+
 /** Rasterise an image/SVG data-URL into a texture (SVGs get a crisp 1024px). */
 function loadOverlayTexture(
   src: string,
@@ -386,6 +546,16 @@ export class GlimpseRenderer {
   private activeHotspot: [number, number] = CURSOR_HOTSPOT.default;
   private cursorColor = '#111111';
 
+  /** Uploaded custom cursor image. */
+  private customCursorTex: THREE.Texture | null = null;
+  private customCursorSrc: string | null = null;
+
+  /** Name badge trailing the cursor. */
+  private badgeMesh!: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
+  private badgeTextures = new Map<string, { tex: THREE.Texture; aspect: number }>();
+  private activeBadge = '';
+  private badgeAspect = 3;
+
   private overlays = new Map<string, OverlayNode>();
   private overlayList: Overlay[] = [];
 
@@ -394,6 +564,16 @@ export class GlimpseRenderer {
 
   /** Spotlight darkening quad over the recording. */
   private spotMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+
+  /** Screen-space blur post pass: scene → render target → masked-blur quad.
+   * The target stays 1×1 until screen blur is actually used, so it never costs
+   * a full-resolution allocation when off. */
+  private postRT: THREE.WebGLRenderTarget;
+  private postScene = new THREE.Scene();
+  private postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private postQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  private outW = 1;
+  private outH = 1;
 
   /** Keystroke HUD keycap (screen space, bottom-centre). */
   private keyMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
@@ -466,6 +646,7 @@ export class GlimpseRenderer {
           radius: { value: 0.05 },
           dofAmount: { value: 0 },
           focusDist: { value: FOCUS_DIST },
+          rim: { value: 0 },
         },
         transparent: true,
       }),
@@ -500,6 +681,19 @@ export class GlimpseRenderer {
     );
     this.ringMesh.renderOrder = 9;
 
+    // Name badge trailing the cursor (tilts with the screen).
+    this.badgeMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        opacity: 0,
+      }),
+    );
+    this.badgeMesh.renderOrder = 11;
+    this.badgeMesh.visible = false;
+
     this.spotMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.ShaderMaterial({
@@ -513,6 +707,7 @@ export class GlimpseRenderer {
           radius: { value: 0.26 },
           strength: { value: 0.7 },
           aspect: { value: 1 },
+          band: { value: 0 },
         },
       }),
     );
@@ -525,6 +720,7 @@ export class GlimpseRenderer {
       this.spotMesh,
       this.cursorMesh,
       this.ringMesh,
+      this.badgeMesh,
     );
     this.poseGroup.add(this.zoomGroup);
     this.scene.add(this.poseGroup);
@@ -544,6 +740,32 @@ export class GlimpseRenderer {
     this.keyMesh.renderOrder = 25;
     this.keyMesh.visible = false;
     this.hudGroup.add(this.keyMesh);
+
+    // Post-process render target + fullscreen blur quad (sRGB so colours round-
+    // trip through the render target without washing out).
+    this.postRT = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+    });
+    this.postRT.texture.colorSpace = THREE.SRGBColorSpace;
+    this.postQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        vertexShader: POST_VERT,
+        fragmentShader: POST_FRAG,
+        uniforms: {
+          tDiffuse: { value: this.postRT.texture },
+          texel: { value: new THREE.Vector2(1, 1) },
+          maxBlur: { value: 0 },
+          mode: { value: 1 },
+          pos: { value: 0.2 },
+          feather: { value: 0.12 },
+        },
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.postScene.add(this.postQuad);
 
     this.setCursorTexture('default');
     this.applyStyle(project.style);
@@ -595,6 +817,10 @@ export class GlimpseRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.backdrop.material.uniforms.viewAspect.value = width / height;
+    // Remember the output size; the post target is (re)sized lazily only when
+    // screen blur is on — see render().
+    this.outW = width;
+    this.outH = height;
     this.layout();
   }
 
@@ -613,6 +839,11 @@ export class GlimpseRenderer {
 
     this.shadowPlane.visible = style.shadow;
     this.cursorColor = style.cursor.color || '#111111';
+    this.applyCustomCursor(style.cursor.image);
+
+    this.videoPlane.material.uniforms.rim.value = style.rimLight?.enabled
+      ? style.rimLight.strength
+      : 0;
 
     // DoF: blur radius grows with world-space distance from the focus plane.
     this.videoPlane.material.uniforms.dofAmount.value = style.dof.enabled
@@ -637,6 +868,10 @@ export class GlimpseRenderer {
     }
     for (const o of overlays) {
       const flat = !!o.flat;
+      const isText = o.kind === 'text';
+      // A source key that changes when the visible content does, so edits
+      // regenerate the texture.
+      const src = isText ? `text:${o.text ?? ''}|${o.color ?? ''}|${!!o.background}` : o.imageData;
       const existing = this.overlays.get(o.id);
       if (existing) {
         // Flat flag flipped — move the mesh between screen space and the
@@ -647,7 +882,7 @@ export class GlimpseRenderer {
           (flat ? this.hudGroup : this.zoomGroup).add(existing.mesh);
           existing.flat = flat;
         }
-        if (existing.src === o.imageData) continue;
+        if (existing.src === src) continue;
         existing.mesh.removeFromParent();
         (existing.mesh.material.map as THREE.Texture | null)?.dispose();
         existing.mesh.material.dispose();
@@ -665,27 +900,34 @@ export class GlimpseRenderer {
       mesh.renderOrder = flat ? 20 : 5;
       mesh.visible = false;
       (flat ? this.hudGroup : this.zoomGroup).add(mesh);
-      const node: OverlayNode = { mesh, src: o.imageData, aspect: 1, flat };
+      const node: OverlayNode = { mesh, src, aspect: 1, flat };
       this.overlays.set(o.id, node);
-      this.pending.push(
-        new Promise<void>((resolve) => {
-          loadOverlayTexture(
-            o.imageData,
-            (tex, aspect) => {
-              if (this.overlays.get(o.id) !== node) {
-                tex.dispose();
+      if (isText) {
+        const { tex, aspect } = makeTextTexture(o.text ?? '', o.color ?? '#ffffff', !!o.background);
+        node.aspect = aspect;
+        mesh.material.map = tex;
+        mesh.material.needsUpdate = true;
+      } else {
+        this.pending.push(
+          new Promise<void>((resolve) => {
+            loadOverlayTexture(
+              o.imageData,
+              (tex, aspect) => {
+                if (this.overlays.get(o.id) !== node) {
+                  tex.dispose();
+                  resolve();
+                  return;
+                }
+                node.aspect = aspect;
+                mesh.material.map = tex;
+                mesh.material.needsUpdate = true;
                 resolve();
-                return;
-              }
-              node.aspect = aspect;
-              mesh.material.map = tex;
-              mesh.material.needsUpdate = true;
-              resolve();
-            },
-            resolve,
-          );
-        }),
-      );
+              },
+              resolve,
+            );
+          }),
+        );
+      }
     }
   }
 
@@ -782,6 +1024,41 @@ export class GlimpseRenderer {
     this.cursorMesh.material.needsUpdate = true;
   }
 
+  /** Point the cursor at the uploaded custom image (if it has decoded). */
+  private setCustomCursor(): void {
+    if (!this.customCursorTex) return;
+    const key = 'custom';
+    if (key === this.activeCursorKey) return;
+    this.activeCursorKey = key;
+    this.activeHotspot = [0.5, 0.5];
+    this.cursorMesh.material.map = this.customCursorTex;
+    this.cursorMesh.material.needsUpdate = true;
+  }
+
+  /** Load the uploaded custom cursor image into a texture. */
+  private applyCustomCursor(src: string | undefined): void {
+    if (!src) {
+      this.customCursorSrc = null;
+      return;
+    }
+    if (src === this.customCursorSrc) return;
+    this.customCursorSrc = src;
+    this.activeCursorKey = ''; // force a re-point once it lands
+    this.pending.push(
+      new Promise<void>((resolve) => {
+        loadOverlayTexture(
+          src,
+          (tex) => {
+            this.customCursorTex?.dispose();
+            this.customCursorTex = tex;
+            resolve();
+          },
+          resolve,
+        );
+      }),
+    );
+  }
+
   /** Render one frame from sampled state. Pure function of its input. */
   render(frame: FrameState): void {
     const { camera, cursor, pose } = frame;
@@ -860,6 +1137,7 @@ export class GlimpseRenderer {
       u.radius.value = sp.radius / MARG;
       u.strength.value = sp.strength;
       u.aspect.value = this.planeW / this.planeH;
+      u.band.value = sp.shape === 'band' ? 1 : 0;
     } else {
       this.spotMesh.visible = false;
     }
@@ -893,7 +1171,11 @@ export class GlimpseRenderer {
     this.ringMesh.visible =
       cursor.visible && cursor.clickPulse > 0 && style.cursor.style !== 'none';
     if (this.cursorMesh.visible) {
-      if (style.cursor.style === 'circle') this.setCursorTexture('circle');
+      const cs = style.cursor.style;
+      if (cs === 'custom' && this.customCursorTex) this.setCustomCursor();
+      else if (cs === 'circle') this.setCursorTexture('circle');
+      else if (cs === 'text') this.setCursorTexture('text');
+      else if (cs === 'crosshair') this.setCursorTexture('crosshair');
       else this.setCursorTexture(cursor.hand && style.cursor.handOnHover ? 'hand' : 'default');
 
       const cx = (cursor.x - 0.5) * this.planeW;
@@ -915,6 +1197,36 @@ export class GlimpseRenderer {
         this.ringMesh.scale.set(ringSize, ringSize, 1);
         this.ringMesh.material.opacity = cursor.clickPulse * 0.85;
       }
+
+      // Name badge trailing the cursor.
+      const badge = style.cursor.badge?.trim();
+      if (badge) {
+        if (badge !== this.activeBadge) {
+          this.activeBadge = badge;
+          let entry = this.badgeTextures.get(badge);
+          if (!entry) {
+            entry = makeKeycapTexture(badge);
+            this.badgeTextures.set(badge, entry);
+          }
+          this.badgeMesh.material.map = entry.tex;
+          this.badgeMesh.material.needsUpdate = true;
+          this.badgeAspect = entry.aspect;
+        }
+        const bh = size * 0.7;
+        this.badgeMesh.scale.set(bh * this.badgeAspect, bh, 1);
+        // Sit just below-right of the pointer tip.
+        this.badgeMesh.position.set(
+          cx + size * 0.5 + (bh * this.badgeAspect) / 2,
+          cy - size * 0.5,
+          0.11,
+        );
+        this.badgeMesh.material.opacity = 1;
+        this.badgeMesh.visible = true;
+      } else {
+        this.badgeMesh.visible = false;
+      }
+    } else {
+      this.badgeMesh.visible = false;
     }
 
     // Keystroke HUD: keycap pinned bottom-centre, holds then fades.
@@ -944,7 +1256,29 @@ export class GlimpseRenderer {
     }
 
     this.videoTexture && (this.videoTexture.needsUpdate = true);
-    this.renderer.render(this.scene, this.camera);
+
+    const sb = this.style.screenBlur;
+    if (sb?.enabled && sb.amount > 0) {
+      // Grow the post target to the output size on first use.
+      if (this.postRT.width !== this.outW || this.postRT.height !== this.outH) {
+        this.postRT.setSize(this.outW, this.outH);
+        this.postQuad.material.uniforms.texel.value.set(1 / this.outW, 1 / this.outH);
+      }
+      // Render the scene to a target, then blur it in screen space with a
+      // gradient/band mask fixed to the output frame.
+      const u = this.postQuad.material.uniforms;
+      u.mode.value = sb.mode === 'band' ? 2 : sb.mode === 'top' ? 3 : 1;
+      u.maxBlur.value = sb.amount * 70;
+      // style position is 0=top…1=bottom; UV y is 0=bottom, so flip.
+      u.pos.value = 1 - sb.position;
+      this.renderer.setRenderTarget(this.postRT);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.postScene, this.postCamera);
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   dispose(): void {
@@ -952,8 +1286,12 @@ export class GlimpseRenderer {
     this.backdropImage?.dispose();
     for (const m of this.blurMeshes) m.material.dispose();
     this.spotMesh.material.dispose();
+    this.postRT.dispose();
+    this.postQuad.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
+    this.customCursorTex?.dispose();
     this.keyTextures.forEach((e) => e.tex.dispose());
+    this.badgeTextures.forEach((e) => e.tex.dispose());
     for (const node of this.overlays.values()) {
       (node.mesh.material.map as THREE.Texture | null)?.dispose();
       node.mesh.material.dispose();
