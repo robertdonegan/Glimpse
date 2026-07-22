@@ -58,6 +58,14 @@ export async function loadRecordingVideo(blob: Blob): Promise<HTMLVideoElement> 
   video.src = URL.createObjectURL(blob);
   video.muted = true;
   video.playsInline = true;
+  // Attach hidden to the DOM. A fully-detached <video> advances time/audio but
+  // some engines (notably WKWebView) won't decode its *visual* frames into a
+  // WebGL/VideoTexture — the recording renders black. Being in the tree fixes
+  // that. Callers remove it on cleanup.
+  video.setAttribute('aria-hidden', 'true');
+  video.style.cssText =
+    'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+  document.body.appendChild(video);
   await new Promise<void>((res, rej) => {
     video.onloadedmetadata = () => res();
     video.onerror = () => rej(new Error('Could not load recording'));
@@ -445,6 +453,7 @@ export async function exportProject(
     encoder.state !== 'closed' && encoder.close();
     renderer.dispose();
     URL.revokeObjectURL(video.src);
+    video.remove();
   }
 }
 
@@ -507,6 +516,7 @@ export async function exportGif(
   } finally {
     renderer.dispose();
     URL.revokeObjectURL(video.src);
+    video.remove();
   }
 }
 
@@ -535,6 +545,7 @@ export async function exportStill(project: Project, tMs: number, scale = 2): Pro
   } finally {
     renderer.dispose();
     URL.revokeObjectURL(video.src);
+    video.remove();
   }
 }
 
@@ -596,6 +607,7 @@ async function exportRealtimeFallback(
     rec.onstop = () => {
       renderer.dispose();
       URL.revokeObjectURL(video.src);
+    video.remove();
       if (aborted) {
         reject(new DOMException('Export cancelled', 'AbortError'));
         return;

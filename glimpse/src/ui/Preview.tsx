@@ -150,6 +150,7 @@ export function Preview({
         if (disposed) {
           video.pause();
           URL.revokeObjectURL(video.src);
+          video.remove();
           return;
         }
         videoRef.current = video;
@@ -173,6 +174,7 @@ export function Preview({
       if (videoRef.current) {
         videoRef.current.pause();
         URL.revokeObjectURL(videoRef.current.src);
+        videoRef.current.remove();
         videoRef.current = null;
       }
     };
