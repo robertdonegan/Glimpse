@@ -616,6 +616,23 @@ export function Inspector({
         {style.spotlight.enabled && (
           <>
             <div className="row">
+              <label>Shape</label>
+              <span className="select-wrap">
+                <select
+                  value={style.spotlight.shape}
+                  onChange={(e) =>
+                    patchStyle('spotlight', {
+                      ...style.spotlight,
+                      shape: e.target.value as 'pool' | 'band',
+                    })
+                  }
+                >
+                  <option value="pool">Radial pool</option>
+                  <option value="band">Horizontal band</option>
+                </select>
+              </span>
+            </div>
+            <div className="row">
               <label>Follow cursor</label>
               <input
                 type="checkbox"

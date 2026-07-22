@@ -171,10 +171,12 @@ const SPOT_FRAG = /* glsl */ `
   uniform float radius;
   uniform float strength;
   uniform float aspect;
+  uniform float band;   // 0 = radial pool, 1 = horizontal band
   void main() {
     vec2 d = vUv - center;
     d.x *= aspect;
-    float dist = length(d);
+    // Band mode lights a horizontal stripe (distance on Y only).
+    float dist = band > 0.5 ? abs(vUv.y - center.y) : length(d);
     float t = smoothstep(radius, radius * 1.9, dist);
     gl_FragColor = vec4(0.0, 0.0, 0.0, t * strength);
   }
@@ -580,6 +582,7 @@ export class GlimpseRenderer {
           radius: { value: 0.26 },
           strength: { value: 0.7 },
           aspect: { value: 1 },
+          band: { value: 0 },
         },
       }),
     );
@@ -964,6 +967,7 @@ export class GlimpseRenderer {
       u.radius.value = sp.radius / MARG;
       u.strength.value = sp.strength;
       u.aspect.value = this.planeW / this.planeH;
+      u.band.value = sp.shape === 'band' ? 1 : 0;
     } else {
       this.spotMesh.visible = false;
     }

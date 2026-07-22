@@ -143,6 +143,8 @@ export interface StyleSettings {
    */
   spotlight: {
     enabled: boolean;
+    /** Radial pool, or a horizontal lit band. */
+    shape: 'pool' | 'band';
     /** Track the recorded cursor instead of the fixed x/y. */
     follow: boolean;
     x: number;
@@ -255,7 +257,15 @@ export const DEFAULT_STYLE: StyleSettings = {
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
   keystrokes: { enabled: false },
-  spotlight: { enabled: false, follow: true, x: 0.5, y: 0.5, radius: 0.26, strength: 0.7 },
+  spotlight: {
+    enabled: false,
+    shape: 'pool',
+    follow: true,
+    x: 0.5,
+    y: 0.5,
+    radius: 0.26,
+    strength: 0.7,
+  },
   motionBlur: { enabled: false, amount: 0.5 },
   blur: [],
 };
@@ -295,6 +305,7 @@ export function normalizeProject(p: Project): Project {
   style.background = { ...DEFAULT_STYLE.background, ...p.style?.background };
   style.keystrokes = { ...DEFAULT_STYLE.keystrokes, ...p.style?.keystrokes };
   style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
+  style.spotlight.shape = p.style?.spotlight?.shape ?? 'pool';
   style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
   style.position = { ...DEFAULT_STYLE.position, ...p.style?.position };
   style.frameScale = p.style?.frameScale ?? 1;
