@@ -91,6 +91,7 @@ const VIDEO_FRAG = /* glsl */ `
   uniform float radius;     // world units
   uniform float dofAmount;  // world blur radius per world unit of defocus; 0 = off
   uniform float focusDist;  // world units from camera
+  uniform float rim;        // rim/specular highlight strength; 0 = off
 
   // Rounded-rect SDF for corner masking. AA width is a small fixed fraction of
   // the plane — NOT fwidth(): this is called from inside the bokeh loop (below
@@ -105,13 +106,28 @@ const VIDEO_FRAG = /* glsl */ `
     return 1.0 - smoothstep(-aa, aa, dist);
   }
 
+  // Rim/specular: a bright band just inside the rounded edge, as if a light
+  // catches the screen's bevel.
+  float rimGlow() {
+    if (rim < 0.001) return 0.0;
+    vec2 p = (vUv - 0.5) * planeSize;
+    vec2 b = planeSize * 0.5 - vec2(radius);
+    vec2 d = abs(p) - b;
+    float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+    float w = 0.02 * min(planeSize.x, planeSize.y);
+    // Peak near the edge, fading inward.
+    float band = smoothstep(-w, -w * 0.2, dist) * (1.0 - smoothstep(-w * 0.2, 0.0, dist));
+    return rim * band;
+  }
+
   void main() {
     float coc = dofAmount * abs(vViewZ - focusDist); // circle of confusion, world units
     coc = min(coc, 0.5);
+    float glow = rimGlow();
 
     if (coc < 0.002) {
       vec4 c = texture2D(map, vUv);
-      gl_FragColor = vec4(c.rgb, rectAlpha(vUv));
+      gl_FragColor = vec4(c.rgb + glow, rectAlpha(vUv));
       return;
     }
 
@@ -130,7 +146,7 @@ const VIDEO_FRAG = /* glsl */ `
       acc += texture2D(map, uv).rgb;
       accA += rectAlpha(uv);
     }
-    gl_FragColor = vec4(acc / float(TAPS + 1), accA / float(TAPS + 1));
+    gl_FragColor = vec4(acc / float(TAPS + 1) + glow, accA / float(TAPS + 1));
   }
 `;
 
@@ -578,6 +594,7 @@ export class GlimpseRenderer {
           radius: { value: 0.05 },
           dofAmount: { value: 0 },
           focusDist: { value: FOCUS_DIST },
+          rim: { value: 0 },
         },
         transparent: true,
       }),
@@ -769,6 +786,10 @@ export class GlimpseRenderer {
     this.shadowPlane.visible = style.shadow;
     this.cursorColor = style.cursor.color || '#111111';
     this.applyCustomCursor(style.cursor.image);
+
+    this.videoPlane.material.uniforms.rim.value = style.rimLight?.enabled
+      ? style.rimLight.strength
+      : 0;
 
     // DoF: blur radius grows with world-space distance from the focus plane.
     this.videoPlane.material.uniforms.dofAmount.value = style.dof.enabled

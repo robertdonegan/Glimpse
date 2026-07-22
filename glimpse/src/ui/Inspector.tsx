@@ -720,6 +720,30 @@ export function Inspector({
         )}
 
         <div className="row" style={{ marginTop: 12 }}>
+          <label>Rim light</label>
+          <input
+            type="checkbox"
+            checked={style.rimLight.enabled}
+            onChange={(e) =>
+              patchStyle('rimLight', { ...style.rimLight, enabled: e.target.checked })
+            }
+            title="A specular highlight along the recording's edge"
+          />
+        </div>
+        {style.rimLight.enabled && (
+          <SliderRow
+            label="Strength"
+            value={style.rimLight.strength}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            parse={(n) => n / 100}
+            onChange={(v) => patchStyle('rimLight', { ...style.rimLight, strength: v })}
+          />
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
           <label>Screen blur</label>
           <input
             type="checkbox"
