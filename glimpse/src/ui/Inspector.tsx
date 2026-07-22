@@ -720,6 +720,60 @@ export function Inspector({
         )}
 
         <div className="row" style={{ marginTop: 12 }}>
+          <label>Screen blur</label>
+          <input
+            type="checkbox"
+            checked={style.screenBlur.enabled}
+            onChange={(e) =>
+              patchStyle('screenBlur', { ...style.screenBlur, enabled: e.target.checked })
+            }
+            title="Soft blur fixed to the output frame — a Framer-style edge fade or a tilt-shift band"
+          />
+        </div>
+        {style.screenBlur.enabled && (
+          <>
+            <div className="row">
+              <label>Mode</label>
+              <span className="select-wrap">
+                <select
+                  value={style.screenBlur.mode}
+                  onChange={(e) =>
+                    patchStyle('screenBlur', {
+                      ...style.screenBlur,
+                      mode: e.target.value as 'bottom' | 'top' | 'band',
+                    })
+                  }
+                >
+                  <option value="bottom">Bottom fade</option>
+                  <option value="top">Top fade</option>
+                  <option value="band">Tilt-shift band</option>
+                </select>
+              </span>
+            </div>
+            <SliderRow
+              label="Amount"
+              value={style.screenBlur.amount}
+              min={0}
+              max={1}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('screenBlur', { ...style.screenBlur, amount: v })}
+            />
+            <SliderRow
+              label="Position"
+              value={style.screenBlur.position}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(v) => `${Math.round(v * 100)}%`}
+              parse={(n) => n / 100}
+              onChange={(v) => patchStyle('screenBlur', { ...style.screenBlur, position: v })}
+            />
+          </>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
           <label>Keyboard overlay</label>
           <input
             type="checkbox"

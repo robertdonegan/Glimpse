@@ -160,6 +160,19 @@ export interface StyleSettings {
    */
   motionBlur: { enabled: boolean; amount: number };
   /**
+   * Screen-space blur fixed to the output frame (not the recording): a soft
+   * gradient blur from an edge (bottom/top) or a sharp tilt-shift band. Pinned
+   * to the frame, so it survives 3D tilt and zoom.
+   */
+  screenBlur: {
+    enabled: boolean;
+    mode: 'bottom' | 'top' | 'band';
+    /** Blur strength, 0–1. */
+    amount: number;
+    /** Edge/band position as a fraction of the frame height (0 top … 1 bottom). */
+    position: number;
+  };
+  /**
    * Redaction: blurred rectangles pinned to the recording (normalised x,y from
    * top-left, w,h as fractions) — hides sensitive info, tilts/zooms with the
    * content.
@@ -267,6 +280,7 @@ export const DEFAULT_STYLE: StyleSettings = {
     strength: 0.7,
   },
   motionBlur: { enabled: false, amount: 0.5 },
+  screenBlur: { enabled: false, mode: 'bottom', amount: 0.5, position: 0.8 },
   blur: [],
 };
 
@@ -307,6 +321,7 @@ export function normalizeProject(p: Project): Project {
   style.spotlight = { ...DEFAULT_STYLE.spotlight, ...p.style?.spotlight };
   style.spotlight.shape = p.style?.spotlight?.shape ?? 'pool';
   style.motionBlur = { ...DEFAULT_STYLE.motionBlur, ...p.style?.motionBlur };
+  style.screenBlur = { ...DEFAULT_STYLE.screenBlur, ...p.style?.screenBlur };
   style.position = { ...DEFAULT_STYLE.position, ...p.style?.position };
   style.frameScale = p.style?.frameScale ?? 1;
   style.blur = p.style?.blur ?? [];

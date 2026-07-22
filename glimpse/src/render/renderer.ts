@@ -182,6 +182,56 @@ const SPOT_FRAG = /* glsl */ `
   }
 `;
 
+// Fullscreen post pass: a screen-space blur whose radius is masked by a
+// vertical gradient (bottom/top edge) or a tilt-shift band. Pinned to the
+// output frame, independent of the recording's 3D transform.
+const POST_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const POST_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  uniform sampler2D tDiffuse;
+  uniform vec2 texel;
+  uniform float maxBlur;   // px
+  uniform int mode;        // 1 = bottom, 2 = band (tilt-shift), 3 = top
+  uniform float pos;       // 0..1 across the frame height (0 = bottom in UV)
+  uniform float feather;
+
+  float maskAmount() {
+    if (mode == 2) {
+      // Tilt-shift: sharp at pos, blur away above and below.
+      return smoothstep(feather, feather * 2.4, abs(vUv.y - pos));
+    } else if (mode == 3) {
+      // Top edge.
+      return smoothstep(pos - feather, pos, vUv.y);
+    }
+    // Bottom edge (default).
+    return 1.0 - smoothstep(pos - feather, pos, vUv.y);
+  }
+
+  void main() {
+    float a = maskAmount();
+    if (a < 0.01 || maxBlur < 0.5) {
+      gl_FragColor = texture2D(tDiffuse, vUv);
+      return;
+    }
+    float r = a * maxBlur;
+    const int N = 16;
+    vec4 acc = texture2D(tDiffuse, vUv);
+    for (int i = 0; i < N; i++) {
+      float ang = 2.399963 * float(i);
+      float rad = sqrt((float(i) + 0.5) / float(N)) * r;
+      acc += texture2D(tDiffuse, vUv + vec2(cos(ang), sin(ang)) * rad * texel);
+    }
+    gl_FragColor = acc / float(N + 1);
+  }
+`;
+
 function makeShadowTexture(): THREE.Texture {
   const s = 256;
   const cv = document.createElement('canvas');
@@ -451,6 +501,12 @@ export class GlimpseRenderer {
   /** Spotlight darkening quad over the recording. */
   private spotMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 
+  /** Screen-space blur post pass: scene → render target → masked-blur quad. */
+  private postRT: THREE.WebGLRenderTarget;
+  private postScene = new THREE.Scene();
+  private postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private postQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+
   /** Keystroke HUD keycap (screen space, bottom-centre). */
   private keyMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
   private keyTextures = new Map<string, { tex: THREE.Texture; aspect: number }>();
@@ -616,6 +672,32 @@ export class GlimpseRenderer {
     this.keyMesh.visible = false;
     this.hudGroup.add(this.keyMesh);
 
+    // Post-process render target + fullscreen blur quad (sRGB so colours round-
+    // trip through the render target without washing out).
+    this.postRT = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+    });
+    this.postRT.texture.colorSpace = THREE.SRGBColorSpace;
+    this.postQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        vertexShader: POST_VERT,
+        fragmentShader: POST_FRAG,
+        uniforms: {
+          tDiffuse: { value: this.postRT.texture },
+          texel: { value: new THREE.Vector2(1, 1) },
+          maxBlur: { value: 0 },
+          mode: { value: 1 },
+          pos: { value: 0.2 },
+          feather: { value: 0.12 },
+        },
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.postScene.add(this.postQuad);
+
     this.setCursorTexture('default');
     this.applyStyle(project.style);
     this.applyOverlays(project.overlays ?? []);
@@ -666,6 +748,8 @@ export class GlimpseRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.backdrop.material.uniforms.viewAspect.value = width / height;
+    this.postRT.setSize(width, height);
+    this.postQuad.material.uniforms.texel.value.set(1 / width, 1 / height);
     this.layout();
   }
 
@@ -1086,7 +1170,24 @@ export class GlimpseRenderer {
     }
 
     this.videoTexture && (this.videoTexture.needsUpdate = true);
-    this.renderer.render(this.scene, this.camera);
+
+    const sb = this.style.screenBlur;
+    if (sb?.enabled && sb.amount > 0) {
+      // Render the scene to a target, then blur it in screen space with a
+      // gradient/band mask fixed to the output frame.
+      const u = this.postQuad.material.uniforms;
+      u.mode.value = sb.mode === 'band' ? 2 : sb.mode === 'top' ? 3 : 1;
+      u.maxBlur.value = sb.amount * 70;
+      // style position is 0=top…1=bottom; UV y is 0=bottom, so flip.
+      u.pos.value = 1 - sb.position;
+      this.renderer.setRenderTarget(this.postRT);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.postScene, this.postCamera);
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   dispose(): void {
@@ -1094,6 +1195,8 @@ export class GlimpseRenderer {
     this.backdropImage?.dispose();
     for (const m of this.blurMeshes) m.material.dispose();
     this.spotMesh.material.dispose();
+    this.postRT.dispose();
+    this.postQuad.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
     this.customCursorTex?.dispose();
     this.keyTextures.forEach((e) => e.tex.dispose());
