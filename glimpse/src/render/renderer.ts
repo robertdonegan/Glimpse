@@ -196,13 +196,15 @@ function makeShadowTexture(): THREE.Texture {
   return tex;
 }
 
-type CursorTexKind = 'default' | 'circle' | 'hand';
+type CursorTexKind = 'default' | 'circle' | 'hand' | 'text' | 'crosshair';
 
 /** Texture anchor (0..1, y from bottom) per cursor art — the hotspot. */
 const CURSOR_HOTSPOT: Record<CursorTexKind, [number, number]> = {
   default: [0.23, 0.86],
   circle: [0.5, 0.5],
   hand: [0.44, 0.9],
+  text: [0.5, 0.5],
+  crosshair: [0.5, 0.5],
 };
 
 /** Outline colour that reads against the fill. */
@@ -233,6 +235,48 @@ function makeCursorTexture(kind: CursorTexKind, color: string): THREE.Texture {
     ctx.strokeStyle = outline;
     ctx.lineWidth = s * 0.04;
     ctx.stroke();
+  } else if (kind === 'text') {
+    // I-beam text cursor.
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = s * 0.05;
+    ctx.lineCap = 'round';
+    const m = s / 2;
+    ctx.beginPath();
+    ctx.moveTo(m, s * 0.2);
+    ctx.lineTo(m, s * 0.8);
+    ctx.moveTo(m - s * 0.11, s * 0.2);
+    ctx.lineTo(m + s * 0.11, s * 0.2);
+    ctx.moveTo(m - s * 0.11, s * 0.8);
+    ctx.lineTo(m + s * 0.11, s * 0.8);
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = s * 0.09;
+    ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = s * 0.05;
+    ctx.stroke();
+    ctx.restore();
+  } else if (kind === 'crosshair') {
+    ctx.save();
+    ctx.lineCap = 'round';
+    const m = s / 2;
+    const draw = (col: string, w: number) => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(m, s * 0.16);
+      ctx.lineTo(m, s * 0.4);
+      ctx.moveTo(m, s * 0.6);
+      ctx.lineTo(m, s * 0.84);
+      ctx.moveTo(s * 0.16, m);
+      ctx.lineTo(s * 0.4, m);
+      ctx.moveTo(s * 0.6, m);
+      ctx.lineTo(s * 0.84, m);
+      ctx.stroke();
+    };
+    draw(outline, s * 0.075);
+    draw(color, s * 0.04);
+    ctx.restore();
   } else if (kind === 'hand') {
     // Pointing hand, OS style.
     const path = new Path2D(
@@ -386,6 +430,16 @@ export class GlimpseRenderer {
   private activeHotspot: [number, number] = CURSOR_HOTSPOT.default;
   private cursorColor = '#111111';
 
+  /** Uploaded custom cursor image. */
+  private customCursorTex: THREE.Texture | null = null;
+  private customCursorSrc: string | null = null;
+
+  /** Name badge trailing the cursor. */
+  private badgeMesh!: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
+  private badgeTextures = new Map<string, { tex: THREE.Texture; aspect: number }>();
+  private activeBadge = '';
+  private badgeAspect = 3;
+
   private overlays = new Map<string, OverlayNode>();
   private overlayList: Overlay[] = [];
 
@@ -500,6 +554,19 @@ export class GlimpseRenderer {
     );
     this.ringMesh.renderOrder = 9;
 
+    // Name badge trailing the cursor (tilts with the screen).
+    this.badgeMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        opacity: 0,
+      }),
+    );
+    this.badgeMesh.renderOrder = 11;
+    this.badgeMesh.visible = false;
+
     this.spotMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.ShaderMaterial({
@@ -525,6 +592,7 @@ export class GlimpseRenderer {
       this.spotMesh,
       this.cursorMesh,
       this.ringMesh,
+      this.badgeMesh,
     );
     this.poseGroup.add(this.zoomGroup);
     this.scene.add(this.poseGroup);
@@ -613,6 +681,7 @@ export class GlimpseRenderer {
 
     this.shadowPlane.visible = style.shadow;
     this.cursorColor = style.cursor.color || '#111111';
+    this.applyCustomCursor(style.cursor.image);
 
     // DoF: blur radius grows with world-space distance from the focus plane.
     this.videoPlane.material.uniforms.dofAmount.value = style.dof.enabled
@@ -782,6 +851,41 @@ export class GlimpseRenderer {
     this.cursorMesh.material.needsUpdate = true;
   }
 
+  /** Point the cursor at the uploaded custom image (if it has decoded). */
+  private setCustomCursor(): void {
+    if (!this.customCursorTex) return;
+    const key = 'custom';
+    if (key === this.activeCursorKey) return;
+    this.activeCursorKey = key;
+    this.activeHotspot = [0.5, 0.5];
+    this.cursorMesh.material.map = this.customCursorTex;
+    this.cursorMesh.material.needsUpdate = true;
+  }
+
+  /** Load the uploaded custom cursor image into a texture. */
+  private applyCustomCursor(src: string | undefined): void {
+    if (!src) {
+      this.customCursorSrc = null;
+      return;
+    }
+    if (src === this.customCursorSrc) return;
+    this.customCursorSrc = src;
+    this.activeCursorKey = ''; // force a re-point once it lands
+    this.pending.push(
+      new Promise<void>((resolve) => {
+        loadOverlayTexture(
+          src,
+          (tex) => {
+            this.customCursorTex?.dispose();
+            this.customCursorTex = tex;
+            resolve();
+          },
+          resolve,
+        );
+      }),
+    );
+  }
+
   /** Render one frame from sampled state. Pure function of its input. */
   render(frame: FrameState): void {
     const { camera, cursor, pose } = frame;
@@ -893,7 +997,11 @@ export class GlimpseRenderer {
     this.ringMesh.visible =
       cursor.visible && cursor.clickPulse > 0 && style.cursor.style !== 'none';
     if (this.cursorMesh.visible) {
-      if (style.cursor.style === 'circle') this.setCursorTexture('circle');
+      const cs = style.cursor.style;
+      if (cs === 'custom' && this.customCursorTex) this.setCustomCursor();
+      else if (cs === 'circle') this.setCursorTexture('circle');
+      else if (cs === 'text') this.setCursorTexture('text');
+      else if (cs === 'crosshair') this.setCursorTexture('crosshair');
       else this.setCursorTexture(cursor.hand && style.cursor.handOnHover ? 'hand' : 'default');
 
       const cx = (cursor.x - 0.5) * this.planeW;
@@ -915,6 +1023,36 @@ export class GlimpseRenderer {
         this.ringMesh.scale.set(ringSize, ringSize, 1);
         this.ringMesh.material.opacity = cursor.clickPulse * 0.85;
       }
+
+      // Name badge trailing the cursor.
+      const badge = style.cursor.badge?.trim();
+      if (badge) {
+        if (badge !== this.activeBadge) {
+          this.activeBadge = badge;
+          let entry = this.badgeTextures.get(badge);
+          if (!entry) {
+            entry = makeKeycapTexture(badge);
+            this.badgeTextures.set(badge, entry);
+          }
+          this.badgeMesh.material.map = entry.tex;
+          this.badgeMesh.material.needsUpdate = true;
+          this.badgeAspect = entry.aspect;
+        }
+        const bh = size * 0.7;
+        this.badgeMesh.scale.set(bh * this.badgeAspect, bh, 1);
+        // Sit just below-right of the pointer tip.
+        this.badgeMesh.position.set(
+          cx + size * 0.5 + (bh * this.badgeAspect) / 2,
+          cy - size * 0.5,
+          0.11,
+        );
+        this.badgeMesh.material.opacity = 1;
+        this.badgeMesh.visible = true;
+      } else {
+        this.badgeMesh.visible = false;
+      }
+    } else {
+      this.badgeMesh.visible = false;
     }
 
     // Keystroke HUD: keycap pinned bottom-centre, holds then fades.
@@ -953,7 +1091,9 @@ export class GlimpseRenderer {
     for (const m of this.blurMeshes) m.material.dispose();
     this.spotMesh.material.dispose();
     this.cursorTextures.forEach((t) => t.dispose());
+    this.customCursorTex?.dispose();
     this.keyTextures.forEach((e) => e.tex.dispose());
+    this.badgeTextures.forEach((e) => e.tex.dispose());
     for (const node of this.overlays.values()) {
       (node.mesh.material.map as THREE.Texture | null)?.dispose();
       node.mesh.material.dispose();

@@ -149,6 +149,7 @@ export function Inspector({
   const backdropInput = useRef<HTMLInputElement>(null);
   const overlayInput = useRef<HTMLInputElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
+  const cursorInput = useRef<HTMLInputElement>(null);
 
   if (!project) return null;
   const { style, recording } = project;
@@ -220,9 +221,65 @@ export function Inspector({
               >
                 <option value="default">Pointer</option>
                 <option value="circle">Circle</option>
+                <option value="text">Text (I-beam)</option>
+                <option value="crosshair">Crosshair</option>
+                <option value="custom">Custom image…</option>
                 <option value="none">Hidden</option>
               </select>
               </span>
+            </div>
+            {style.cursor.style === 'custom' && (
+              <div className="row">
+                <label>Image</label>
+                <div className="seg-row">
+                  <button className="chip" onClick={() => cursorInput.current?.click()}>
+                    {style.cursor.image ? 'Replace…' : 'Upload…'}
+                  </button>
+                  {style.cursor.image && (
+                    <button
+                      className="chip"
+                      onClick={() =>
+                        patchStyle('cursor', { ...style.cursor, image: undefined })
+                      }
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={cursorInput}
+                  type="file"
+                  accept="image/*,.svg"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      const reader = new FileReader();
+                      reader.onload = () =>
+                        patchStyle('cursor', {
+                          ...style.cursor,
+                          image: reader.result as string,
+                        });
+                      reader.readAsDataURL(f);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            )}
+            <div className="row">
+              <label>Name badge</label>
+              <input
+                type="text"
+                className="frame-url"
+                style={{ height: 24, fontSize: 13 }}
+                value={style.cursor.badge}
+                placeholder="e.g. Alex"
+                onChange={(e) =>
+                  patchStyle('cursor', { ...style.cursor, badge: e.target.value })
+                }
+                aria-label="Cursor name badge"
+              />
             </div>
             <SliderRow
               label="Size"

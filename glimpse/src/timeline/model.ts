@@ -89,7 +89,13 @@ export interface ZoomSegment {
   pose?: { rotX: number; rotY: number; rotZ: number };
 }
 
-export type CursorStyle = 'default' | 'circle' | 'none';
+export type CursorStyle =
+  | 'default'
+  | 'circle'
+  | 'text'
+  | 'crosshair'
+  | 'custom'
+  | 'none';
 
 export interface StyleSettings {
   background: BackgroundSettings;
@@ -120,6 +126,10 @@ export interface StyleSettings {
     /** Glide the cursor across cut boundaries instead of jumping — for
      * continuity when sections are removed. */
     bridgeCuts: boolean;
+    /** Custom cursor image (data URL) — used when style is 'custom'. */
+    image?: string;
+    /** Name badge trailing the cursor; empty = off. */
+    badge: string;
   };
   /** Static 3D pose for hero shots, degrees. */
   pose: { rotX: number; rotY: number; rotZ: number };
@@ -240,6 +250,7 @@ export const DEFAULT_STYLE: StyleSettings = {
     color: '#111111',
     returnToStart: false,
     bridgeCuts: false,
+    badge: '',
   },
   pose: { rotX: 0, rotY: 0, rotZ: 0 },
   dof: { enabled: false, strength: 0.5 },
