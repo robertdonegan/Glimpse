@@ -734,7 +734,10 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
     let duration_ms = (active.start.elapsed().as_secs_f64() * 1000.0 - shift_ms).max(1.0);
     let (screen_w, screen_h) = (active.display_w, active.display_h);
 
-    if !std::path::Path::new(&active.path).exists() {
+    let file_size = std::fs::metadata(&active.path).map(|m| m.len()).unwrap_or(0);
+    // The file existing isn't enough — a permission-denied capture writes an
+    // empty (or header-only) file. Treat anything too small as a failure.
+    if file_size < 8_192 {
         let details = active
             .stderr_log
             .lock()
@@ -745,9 +748,11 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         } else {
             format!("Capture error: {details}. ")
         };
+        let _ = std::fs::remove_file(&active.path);
         return Err(format!(
-            "{prefix}Recording file was not written. Grant Screen Recording permission in \
-             System Settings → Privacy & Security → Screen Recording, then restart Glimpse."
+            "{prefix}The recording came out empty — Glimpse most likely lacks Screen Recording \
+             permission (macOS resets it whenever the app is rebuilt). Turn Glimpse ON in System \
+             Settings → Privacy & Security → Screen Recording, then quit and reopen Glimpse."
         ));
     }
 
