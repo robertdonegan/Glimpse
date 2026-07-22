@@ -86,6 +86,8 @@ interface GlimpseState {
   applyAutoZoom: () => void;
 
   addOverlay: (file: File) => void;
+  /** Add a styled text caption overlay. */
+  addTextOverlay: () => void;
   updateOverlay: (id: string, patch: Partial<Overlay>) => void;
   removeOverlay: (id: string) => void;
 
@@ -443,6 +445,28 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
       commit({ ...p, overlays: [...p.overlays, overlay] });
     };
     reader.readAsDataURL(file);
+  },
+
+  addTextOverlay: () => {
+    const p = get().project;
+    if (!p) return;
+    const overlay: Overlay = {
+      id: makeId('ovl'),
+      name: 'Text',
+      kind: 'text',
+      imageData: '',
+      text: 'Your text',
+      color: '#ffffff',
+      background: false,
+      x: 0.5,
+      y: 0.5,
+      scale: 0.4,
+      start: 0,
+      end: p.recording.duration,
+      opacity: 1,
+      flat: true,
+    };
+    commit({ ...p, overlays: [...p.overlays, overlay] });
   },
 
   updateOverlay: (id, patch) => {

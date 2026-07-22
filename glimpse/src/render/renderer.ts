@@ -439,6 +439,54 @@ function makeKeycapTexture(label: string): { tex: THREE.Texture; aspect: number 
   return { tex, aspect: w / h };
 }
 
+/** Render a styled text caption (multi-line) into a texture. */
+function makeTextTexture(
+  text: string,
+  color: string,
+  background: boolean,
+): { tex: THREE.Texture; aspect: number } {
+  const fontSize = 90;
+  const lineGap = fontSize * 0.28;
+  const font = `600 ${fontSize}px 'IBM Plex Sans', system-ui, sans-serif`;
+  const lines = (text || ' ').split('\n');
+  const meas = document.createElement('canvas').getContext('2d')!;
+  meas.font = font;
+  const textW = Math.max(1, ...lines.map((l) => Math.ceil(meas.measureText(l || ' ').width)));
+  const textH = lines.length * fontSize + (lines.length - 1) * lineGap;
+  const padX = background ? fontSize * 0.5 : fontSize * 0.16;
+  const padY = background ? fontSize * 0.32 : fontSize * 0.16;
+  const w = textW + padX * 2;
+  const h = textH + padY * 2;
+  const cv = document.createElement('canvas');
+  cv.width = Math.ceil(w);
+  cv.height = Math.ceil(h);
+  const ctx = cv.getContext('2d')!;
+  if (background) {
+    const r = h * 0.16;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, w, h, r);
+    ctx.fillStyle = 'rgba(15,17,22,0.72)';
+    ctx.fill();
+  }
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (!background) {
+    // Soft shadow so text reads over any content.
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = fontSize * 0.14;
+  }
+  ctx.fillStyle = color || '#ffffff';
+  lines.forEach((line, i) => {
+    const y = padY + fontSize / 2 + i * (fontSize + lineGap);
+    ctx.fillText(line, w / 2, y);
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return { tex, aspect: w / h };
+}
+
 /** Rasterise an image/SVG data-URL into a texture (SVGs get a crisp 1024px). */
 function loadOverlayTexture(
   src: string,
@@ -814,6 +862,10 @@ export class GlimpseRenderer {
     }
     for (const o of overlays) {
       const flat = !!o.flat;
+      const isText = o.kind === 'text';
+      // A source key that changes when the visible content does, so edits
+      // regenerate the texture.
+      const src = isText ? `text:${o.text ?? ''}|${o.color ?? ''}|${!!o.background}` : o.imageData;
       const existing = this.overlays.get(o.id);
       if (existing) {
         // Flat flag flipped — move the mesh between screen space and the
@@ -824,7 +876,7 @@ export class GlimpseRenderer {
           (flat ? this.hudGroup : this.zoomGroup).add(existing.mesh);
           existing.flat = flat;
         }
-        if (existing.src === o.imageData) continue;
+        if (existing.src === src) continue;
         existing.mesh.removeFromParent();
         (existing.mesh.material.map as THREE.Texture | null)?.dispose();
         existing.mesh.material.dispose();
@@ -842,27 +894,34 @@ export class GlimpseRenderer {
       mesh.renderOrder = flat ? 20 : 5;
       mesh.visible = false;
       (flat ? this.hudGroup : this.zoomGroup).add(mesh);
-      const node: OverlayNode = { mesh, src: o.imageData, aspect: 1, flat };
+      const node: OverlayNode = { mesh, src, aspect: 1, flat };
       this.overlays.set(o.id, node);
-      this.pending.push(
-        new Promise<void>((resolve) => {
-          loadOverlayTexture(
-            o.imageData,
-            (tex, aspect) => {
-              if (this.overlays.get(o.id) !== node) {
-                tex.dispose();
+      if (isText) {
+        const { tex, aspect } = makeTextTexture(o.text ?? '', o.color ?? '#ffffff', !!o.background);
+        node.aspect = aspect;
+        mesh.material.map = tex;
+        mesh.material.needsUpdate = true;
+      } else {
+        this.pending.push(
+          new Promise<void>((resolve) => {
+            loadOverlayTexture(
+              o.imageData,
+              (tex, aspect) => {
+                if (this.overlays.get(o.id) !== node) {
+                  tex.dispose();
+                  resolve();
+                  return;
+                }
+                node.aspect = aspect;
+                mesh.material.map = tex;
+                mesh.material.needsUpdate = true;
                 resolve();
-                return;
-              }
-              node.aspect = aspect;
-              mesh.material.map = tex;
-              mesh.material.needsUpdate = true;
-              resolve();
-            },
-            resolve,
-          );
-        }),
-      );
+              },
+              resolve,
+            );
+          }),
+        );
+      }
     }
   }
 

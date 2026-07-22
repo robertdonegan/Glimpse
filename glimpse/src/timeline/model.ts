@@ -196,12 +196,21 @@ export interface BackgroundSettings {
   imageData?: string;
 }
 
-/** An imported graphic (SVG/PNG/…) composited over the recording. */
+/** A graphic (imported image) or a styled text caption composited over the
+ * recording. */
 export interface Overlay {
   id: string;
   name: string;
-  /** Data-URL of the source image. */
+  /** 'image' (default) or 'text'. */
+  kind?: 'image' | 'text';
+  /** Data-URL of the source image (image overlays). */
   imageData: string;
+  /** Text content (text overlays). */
+  text?: string;
+  /** Text colour. */
+  color?: string;
+  /** Draw a rounded background behind the text. */
+  background?: boolean;
   /** Normalised centre position on the recording. */
   x: number;
   y: number;

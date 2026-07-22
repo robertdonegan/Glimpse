@@ -133,6 +133,7 @@ export function Inspector({
   const updateZoom = useGlimpse((s) => s.updateZoom);
   const removeZoom = useGlimpse((s) => s.removeZoom);
   const addOverlay = useGlimpse((s) => s.addOverlay);
+  const addTextOverlay = useGlimpse((s) => s.addTextOverlay);
   const updateOverlay = useGlimpse((s) => s.updateOverlay);
   const removeOverlay = useGlimpse((s) => s.removeOverlay);
   const addMusic = useGlimpse((s) => s.addMusic);
@@ -1169,12 +1170,17 @@ export function Inspector({
         <summary>
           Overlays &amp; idents <Icon name="chevron-down" size={12} />
         </summary>
-        <button className="chip" onClick={() => overlayInput.current?.click()}>
-          Add graphic (SVG, PNG…)
-        </button>
+        <div className="seg-row">
+          <button className="chip" onClick={() => overlayInput.current?.click()}>
+            Add graphic
+          </button>
+          <button className="chip" onClick={() => addTextOverlay()}>
+            Add text
+          </button>
+        </div>
         <p className="hint" style={{ marginTop: 6 }}>
-          Toggle “Flat ident” on a graphic to pin it over the whole frame,
-          unaffected by tilt or zoom — for titles and logos.
+          Toggle “Flat ident” to pin over the whole frame, unaffected by tilt or
+          zoom — for titles and logos.
         </p>
         <input
           ref={overlayInput}
@@ -1197,6 +1203,37 @@ export function Inspector({
                 ×
               </button>
             </div>
+            {o.kind === 'text' && (
+              <>
+                <div className="row">
+                  <label>Text</label>
+                  <input
+                    type="text"
+                    className="frame-url"
+                    style={{ height: 24, fontSize: 13 }}
+                    value={o.text ?? ''}
+                    onChange={(e) => updateOverlay(o.id, { text: e.target.value })}
+                    aria-label="Overlay text"
+                  />
+                </div>
+                <div className="row">
+                  <label>Colour</label>
+                  <input
+                    type="color"
+                    value={o.color ?? '#ffffff'}
+                    onChange={(e) => updateOverlay(o.id, { color: e.target.value })}
+                    aria-label="Text colour"
+                  />
+                  <label style={{ marginLeft: 'auto' }}>Backing</label>
+                  <input
+                    type="checkbox"
+                    checked={!!o.background}
+                    onChange={(e) => updateOverlay(o.id, { background: e.target.checked })}
+                    title="Rounded background behind the text"
+                  />
+                </div>
+              </>
+            )}
             <div className="row">
               <label>Flat ident</label>
               <input
