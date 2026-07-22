@@ -35,6 +35,10 @@ export function Preview({
   /** Rendered CSS size of the canvas, so the rotation-gizmo overlay can pin to
    * it without a fragile circular-CSS wrapper. */
   const [canvasBox, setCanvasBox] = useState({ w: 0, h: 0 });
+  /** Recording-video load status, surfaced in the preview when it fails so the
+   * recording-is-black cause is visible without the dev console. */
+  const [videoStatus, setVideoStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [videoErr, setVideoErr] = useState('');
 
   const project = useGlimpse((s) => s.project);
   const playing = useGlimpse((s) => s.playing);
@@ -145,6 +149,8 @@ export function Preview({
     };
     raf = requestAnimationFrame(loop);
 
+    setVideoStatus('loading');
+    setVideoErr('');
     void loadRecordingVideo(project.recording.blob)
       .then((video) => {
         if (disposed) {
@@ -159,11 +165,18 @@ export function Preview({
         video.muted = false;
         video.volume = 1;
         renderer.attachVideo(video);
+        setVideoStatus('ready');
       })
       .catch((e) => {
         // Video couldn't decode — the scene still renders (backdrop/effects);
         // surface why the recording pixels are missing.
         console.error('Glimpse: recording video failed to load', e);
+        const rec = project.recording;
+        setVideoErr(
+          `${e instanceof Error ? e.message : String(e)} · ${rec.mimeType || 'unknown type'} · ` +
+            `${(rec.blob.size / 1e6).toFixed(1)} MB · ${rec.width}×${rec.height}`,
+        );
+        setVideoStatus('error');
       });
 
     return () => {
@@ -306,6 +319,13 @@ export function Preview({
             pose={project.style.pose}
             onChange={(p) => useGlimpse.getState().patchStyle('pose', p)}
           />
+        </div>
+      )}
+      {videoStatus === 'error' && (
+        <div className="preview-status error">
+          <strong>Recording video couldn’t be decoded</strong>
+          <span>{videoErr}</span>
+          <span>The frame, effects and cursor still work — only the recorded pixels are missing.</span>
         </div>
       )}
     </div>
