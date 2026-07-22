@@ -565,11 +565,15 @@ export class GlimpseRenderer {
   /** Spotlight darkening quad over the recording. */
   private spotMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 
-  /** Screen-space blur post pass: scene → render target → masked-blur quad. */
+  /** Screen-space blur post pass: scene → render target → masked-blur quad.
+   * The target stays 1×1 until screen blur is actually used, so it never costs
+   * a full-resolution allocation when off. */
   private postRT: THREE.WebGLRenderTarget;
   private postScene = new THREE.Scene();
   private postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private postQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  private outW = 1;
+  private outH = 1;
 
   /** Keystroke HUD keycap (screen space, bottom-centre). */
   private keyMesh: THREE.Mesh<THREE.PlaneGeometry, FlatMaterial>;
@@ -813,8 +817,10 @@ export class GlimpseRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.backdrop.material.uniforms.viewAspect.value = width / height;
-    this.postRT.setSize(width, height);
-    this.postQuad.material.uniforms.texel.value.set(1 / width, 1 / height);
+    // Remember the output size; the post target is (re)sized lazily only when
+    // screen blur is on — see render().
+    this.outW = width;
+    this.outH = height;
     this.layout();
   }
 
@@ -1253,6 +1259,11 @@ export class GlimpseRenderer {
 
     const sb = this.style.screenBlur;
     if (sb?.enabled && sb.amount > 0) {
+      // Grow the post target to the output size on first use.
+      if (this.postRT.width !== this.outW || this.postRT.height !== this.outH) {
+        this.postRT.setSize(this.outW, this.outH);
+        this.postQuad.material.uniforms.texel.value.set(1 / this.outW, 1 / this.outH);
+      }
       // Render the scene to a target, then blur it in screen space with a
       // gradient/band mask fixed to the output frame.
       const u = this.postQuad.material.uniforms;
