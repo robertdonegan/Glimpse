@@ -77,79 +77,93 @@ export function Preview({
     let disposed = false;
     let raf = 0;
 
-    void loadRecordingVideo(project.recording.blob).then((video) => {
+    // Start rendering immediately — the scene (backdrop, effects) draws even
+    // before/without a decoded video, so a slow or undecodable recording never
+    // leaves the whole preview blank. The video is attached when it lands.
+    const loop = () => {
       if (disposed) return;
-      videoRef.current = video;
-      // loadRecordingVideo mutes for its duration probe — the preview should
-      // be audible.
-      video.muted = false;
-      video.volume = 1;
-      renderer.attachVideo(video);
-
-      const loop = () => {
-        if (disposed) return;
-        const st = useGlimpse.getState();
-        const current = st.project ?? project;
-        const tMs = st.playing ? video.currentTime * 1000 : st.playhead;
-        if (st.playing) {
-          // Jump over cut ranges so playback only shows kept footage.
-          const cut = (current.cuts ?? []).find((c) => tMs >= c.start && tMs < c.end);
-          if (cut) {
-            video.currentTime = cut.end / 1000;
-            raf = requestAnimationFrame(loop);
-            return;
-          }
-          st.setPlayhead(tMs);
-          // Clip speeds drive the preview's playback rate live (so a 0.5×
-          // slow pass previews exactly as it exports), scaled by the
-          // preview-only slow-viewing rate.
-          const rate = speedAt(current.zooms, tMs) * st.previewRate;
-          video.playbackRate = rate;
-          const trimStart = current.trim?.start ?? 0;
-          const trimEnd = current.trim?.end ?? current.recording.duration;
-          if (video.ended || tMs >= trimEnd) {
-            if (st.loop) {
-              video.currentTime = trimStart / 1000;
-              void video.play();
-              // Restart the music clock with the video so the soundtrack loops
-              // too instead of running on past the out-point.
-              playStartRef.current = performance.now();
-              musicStartedRef.current = false;
-            } else {
-              st.setPlaying(false);
-            }
-          }
-
-          // The music track plays at 1×, independent of cuts and speed, but
-          // bounded by the trim: its clock is anchored to the trim in-point and
-          // restarts on loop. Start it once, then let it play natively —
-          // re-seeking a compressed audio element every frame stuttered.
-          const music = current.music;
-          const el = musicRef.current;
-          if (music && el) {
-            const pos =
-              (trimStart + (performance.now() - playStartRef.current) - music.offset) / 1000;
-            const active = pos >= 0 && pos < music.duration / 1000;
-            el.volume = music.gain;
-            el.playbackRate = 1;
-            if (active && !musicStartedRef.current) {
-              el.currentTime = Math.max(0, pos); // seek once, on (re)start only
-              void el.play();
-              musicStartedRef.current = true;
-            } else if (!active && musicStartedRef.current) {
-              el.pause();
-              musicStartedRef.current = false;
-            }
-          }
-        } else if (musicRef.current) {
-          if (!musicRef.current.paused) musicRef.current.pause();
-          musicStartedRef.current = false; // fresh start next time play begins
+      const st = useGlimpse.getState();
+      const current = st.project ?? project;
+      const video = videoRef.current;
+      const tMs = st.playing && video ? video.currentTime * 1000 : st.playhead;
+      if (st.playing && video) {
+        // Jump over cut ranges so playback only shows kept footage.
+        const cut = (current.cuts ?? []).find((c) => tMs >= c.start && tMs < c.end);
+        if (cut) {
+          video.currentTime = cut.end / 1000;
+          raf = requestAnimationFrame(loop);
+          return;
         }
-        renderer.render(sampleFrame(current, tMs, st.previewRate));
-        raf = requestAnimationFrame(loop);
-      };
+        st.setPlayhead(tMs);
+        // Clip speeds drive the preview's playback rate live (so a 0.5×
+        // slow pass previews exactly as it exports), scaled by the
+        // preview-only slow-viewing rate.
+        const rate = speedAt(current.zooms, tMs) * st.previewRate;
+        video.playbackRate = rate;
+        const trimStart = current.trim?.start ?? 0;
+        const trimEnd = current.trim?.end ?? current.recording.duration;
+        if (video.ended || tMs >= trimEnd) {
+          if (st.loop) {
+            video.currentTime = trimStart / 1000;
+            void video.play();
+            // Restart the music clock with the video so the soundtrack loops
+            // too instead of running on past the out-point.
+            playStartRef.current = performance.now();
+            musicStartedRef.current = false;
+          } else {
+            st.setPlaying(false);
+          }
+        }
+
+        // The music track plays at 1×, independent of cuts and speed, but
+        // bounded by the trim: its clock is anchored to the trim in-point and
+        // restarts on loop. Start it once, then let it play natively —
+        // re-seeking a compressed audio element every frame stuttered.
+        const music = current.music;
+        const el = musicRef.current;
+        if (music && el) {
+          const pos =
+            (trimStart + (performance.now() - playStartRef.current) - music.offset) / 1000;
+          const active = pos >= 0 && pos < music.duration / 1000;
+          el.volume = music.gain;
+          el.playbackRate = 1;
+          if (active && !musicStartedRef.current) {
+            el.currentTime = Math.max(0, pos); // seek once, on (re)start only
+            void el.play();
+            musicStartedRef.current = true;
+          } else if (!active && musicStartedRef.current) {
+            el.pause();
+            musicStartedRef.current = false;
+          }
+        }
+      } else if (musicRef.current) {
+        if (!musicRef.current.paused) musicRef.current.pause();
+        musicStartedRef.current = false; // fresh start next time play begins
+      }
+      renderer.render(sampleFrame(current, tMs, st.previewRate));
       raf = requestAnimationFrame(loop);
-    });
+    };
+    raf = requestAnimationFrame(loop);
+
+    void loadRecordingVideo(project.recording.blob)
+      .then((video) => {
+        if (disposed) {
+          video.pause();
+          URL.revokeObjectURL(video.src);
+          return;
+        }
+        videoRef.current = video;
+        // loadRecordingVideo mutes for its duration probe — the preview should
+        // be audible.
+        video.muted = false;
+        video.volume = 1;
+        renderer.attachVideo(video);
+      })
+      .catch((e) => {
+        // Video couldn't decode — the scene still renders (backdrop/effects);
+        // surface why the recording pixels are missing.
+        console.error('Glimpse: recording video failed to load', e);
+      });
 
     return () => {
       disposed = true;
