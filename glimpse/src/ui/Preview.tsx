@@ -8,6 +8,45 @@ import { PoseGizmo } from './PoseGizmo';
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 /**
+ * Inspect an ISO-BMFF / QuickTime recording so a decode failure reports the
+ * actual cause: container brand, whether it was finalised (a `moov` atom — a
+ * file killed mid-write has data but no index and won't play), and the video
+ * codec.
+ */
+async function probeContainer(blob: Blob): Promise<string> {
+  try {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const tag = (s: string) => [...s].map((c) => c.charCodeAt(0));
+    const tags: Record<string, number[]> = {
+      moov: tag('moov'),
+      avc1: tag('avc1'),
+      hvc1: tag('hvc1'),
+      hev1: tag('hev1'),
+    };
+    const found: Record<string, boolean> = {};
+    for (let i = 0; i < buf.length - 3; i++) {
+      const b = buf[i];
+      for (const k in tags) {
+        if (found[k]) continue;
+        const t = tags[k];
+        if (b === t[0] && buf[i + 1] === t[1] && buf[i + 2] === t[2] && buf[i + 3] === t[3]) {
+          found[k] = true;
+        }
+      }
+    }
+    const brand = String.fromCharCode(...buf.slice(8, 12)).trim() || '?';
+    const codec = found.avc1
+      ? 'H.264'
+      : found.hvc1 || found.hev1
+        ? 'HEVC'
+        : 'unknown codec';
+    return `brand ${brand} · ${codec} · ${found.moov ? 'finalised' : 'NOT finalised (no moov)'}`;
+  } catch {
+    return 'container unreadable';
+  }
+}
+
+/**
  * Live preview. The recording plays in a hidden <video>; every animation
  * frame we sample the timeline at video.currentTime and hand it to the same
  * renderer the exporter uses. What you preview is literally what you export.
@@ -167,16 +206,18 @@ export function Preview({
         renderer.attachVideo(video);
         setVideoStatus('ready');
       })
-      .catch((e) => {
+      .catch(async (e) => {
         // Video couldn't decode — the scene still renders (backdrop/effects);
         // surface why the recording pixels are missing.
         console.error('Glimpse: recording video failed to load', e);
         const rec = project.recording;
-        setVideoErr(
+        const head =
           `${e instanceof Error ? e.message : String(e)} · ${rec.mimeType || 'unknown type'} · ` +
-            `${(rec.blob.size / 1e6).toFixed(1)} MB · ${rec.width}×${rec.height}`,
-        );
+          `${(rec.blob.size / 1e6).toFixed(1)} MB · ${rec.width}×${rec.height}`;
+        setVideoErr(head);
         setVideoStatus('error');
+        const probe = await probeContainer(rec.blob);
+        if (!disposed) setVideoErr(`${head} · ${probe}`);
       });
 
     return () => {
