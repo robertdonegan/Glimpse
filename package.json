@@ -1,0 +1,12 @@
+{
+  "name": "glimpse-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Glimpse — record a glimpse, ship it beautiful (workspace root)",
+  "scripts": {
+    "dev": "npm --prefix glimpse run dev",
+    "build": "npm --prefix glimpse run build",
+    "preview": "npm --prefix glimpse run preview",
+    "tauri": "npm --prefix glimpse run tauri"
+  }
+}
