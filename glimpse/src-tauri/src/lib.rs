@@ -30,6 +30,34 @@ mod capture {
     }
 }
 
+/// Open a finished export in the OS's default app (video/GIF/PNG player).
+mod open {
+    #[tauri::command]
+    pub fn open_path(path: String) -> Result<(), String> {
+        let mut cmd = if cfg!(target_os = "macos") {
+            let mut c = std::process::Command::new("open");
+            c.arg(&path);
+            c
+        } else if cfg!(target_os = "windows") {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "start", ""]).arg(&path);
+            c
+        } else {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(&path);
+            c
+        };
+        let status = cmd
+            .status()
+            .map_err(|e| format!("Could not open {path}: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("Could not open {path}: exited with {status}"))
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -41,6 +69,7 @@ pub fn run() {
             capture::start_native_capture,
             capture::stop_native_capture,
             capture::read_recording,
+            open::open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Glimpse");

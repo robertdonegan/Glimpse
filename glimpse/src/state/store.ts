@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
 import type {
   MusicTrack,
   Overlay,
@@ -10,7 +11,11 @@ import type {
 import { createProject, makeId } from '../timeline/model';
 import { generateAutoZooms } from '../timeline/autoZoom';
 import { beginRecording, type ActiveRecording } from '../capture/recorder';
-import { beginNativeRecording, type CaptureTarget } from '../capture/nativeCapture';
+import {
+  beginNativeRecording,
+  isTauri,
+  type CaptureTarget,
+} from '../capture/nativeCapture';
 import { enterCompactWindow, restoreWindow } from '../capture/appWindow';
 import {
   exportProject,
@@ -19,7 +24,12 @@ import {
   loadRecordingVideo,
   type ExportProgress,
 } from '../export/exporter';
-import { saveProjectFile, openProjectFile, type ProjectHandle } from './projectFile';
+import {
+  saveProjectFile,
+  openProjectFile,
+  fsAccessSupported,
+  type ProjectHandle,
+} from './projectFile';
 
 export type Screen = 'welcome' | 'recording' | 'editor' | 'frame';
 
@@ -147,6 +157,45 @@ function downloadBlob(blob: Blob, filename: string): void {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * Land an export on disk, showing a save-as picker first so the user chooses
+ * where it lands. Desktop: the native save dialog, then hands the finished
+ * file to the OS default player so it can be watched immediately. Browser:
+ * a File System Access save picker when available (Chromium), else a plain
+ * download.
+ */
+async function saveExport(
+  blob: Blob,
+  extension: 'mp4' | 'webm' | 'gif' | 'png',
+  name: string,
+): Promise<void> {
+  const filename = `${name || 'glimpse'}-${stamp()}.${extension}`;
+  if (isTauri()) {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const path = await save({
+      defaultPath: filename,
+      filters: [{ name: 'Glimpse export', extensions: [extension] }],
+    });
+    if (!path) throw new DOMException('Save cancelled', 'AbortError');
+    await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+    // Launch it so the finished file opens in its default app right away.
+    await invoke('open_path', { path });
+    return;
+  }
+  if (fsAccessSupported()) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ description: 'Glimpse export', accept: { [blob.type || 'application/octet-stream']: [`.${extension}`] } }],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
+  downloadBlob(blob, filename);
 }
 
 function stamp(): string {
@@ -544,7 +593,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
         controller.signal,
         get().previewRate,
       );
-      downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.${result.extension}`);
+      await saveExport(result.blob, result.extension, p.name);
     } catch (e) {
       // Cancellation is expected, not an error worth surfacing.
       if ((e as DOMException)?.name !== 'AbortError') throw e;
@@ -567,7 +616,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
         controller.signal,
         get().previewRate,
       );
-      downloadBlob(result.blob, `${p.name || 'glimpse'}-${stamp()}.gif`);
+      await saveExport(result.blob, 'gif', p.name);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') throw e;
     } finally {
@@ -584,7 +633,7 @@ export const useGlimpse = create<GlimpseState>((set, get) => {
     set({ exporting: true, playing: false });
     try {
       const blob = await exportStill(project, playhead, scale);
-      downloadBlob(blob, `${project.name || 'glimpse'}-${stamp()}.png`);
+      await saveExport(blob, 'png', project.name);
     } finally {
       set({ exporting: false });
     }

@@ -8,6 +8,9 @@ export default defineConfig({
   base: process.env.GITHUB_PAGES ? '/Glimpse/' : '/',
   plugins: [react()],
   server: {
+    // tauri.conf.json's devUrl is baked to 5173 — refuse to silently move
+    // ports, otherwise the Tauri window loads whatever happens to own 5173.
+    strictPort: true,
     headers: {
       // Required for SharedArrayBuffer if we later move export into a worker
       // with multi-threaded encoding. Harmless otherwise.
