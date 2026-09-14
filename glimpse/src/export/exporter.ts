@@ -136,18 +136,34 @@ async function seekToFrame(video: HTMLVideoElement, timeSec: number): Promise<vo
  * `decodeAudioData` rejects (notably native QuickTime `.mov` captures). Plays
  * the media once through a MediaStreamDestination, records that to webm/opus,
  * then decodes the webm — the fallback path when direct decode fails.
+ *
+ * WKWebView (the Tauri shell) won't play a media element that isn't in the
+ * document, and autoplay policies gate audible playback on a recent user
+ * gesture — both of which silently killed this path. So the element is hidden
+ * in the DOM like loadRecordingVideo's, and playback starts muted (always
+ * permitted) then un-mutes the instant it begins, which the capture hears.
  */
 async function decodeViaPlayback(blob: Blob): Promise<AudioBuffer | null> {
   const el = document.createElement('video');
   el.src = URL.createObjectURL(blob);
-  el.muted = false;
+  el.muted = true;
   el.volume = 1;
+  el.playsInline = true;
+  el.setAttribute('aria-hidden', 'true');
+  el.style.cssText =
+    'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+  document.body.appendChild(el);
   try {
     await new Promise<void>((res, rej) => {
       el.onloadedmetadata = () => res();
       el.onerror = () => rej(new Error('media load failed'));
     });
+    // Without a recent user gesture an AudioContext starts *suspended*, and a
+    // suspended context moves no samples into the MediaStreamDestination — the
+    // capture would come out as pure silence. Resume explicitly so the graph
+    // actually renders.
     const ctx = new AudioContext();
+    await ctx.resume();
     const source = ctx.createMediaElementSource(el);
     const dest = ctx.createMediaStreamDestination();
     source.connect(dest); // route to capture only — nothing to the speakers
@@ -164,13 +180,49 @@ async function decodeViaPlayback(blob: Blob): Promise<AudioBuffer | null> {
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     const done = new Promise<void>((res) => (rec.onstop = () => res()));
     rec.start();
-    await el.play();
+    try {
+      await el.play();
+      el.muted = false; // let the captured audio through once playback began
+    } catch {
+      // Autoplay blocked even muted (or a stale user-activation window) —
+      // nothing to export.
+      rec.stop();
+      await done;
+      void ctx.close();
+      return null;
+    }
+    // Watchdog: resolve when the media plays to the end, errors, or playback
+    // stalls (missing audio track, or an engine that silently refuses to
+    // decode) — bail rather than hang the export on a media element that never
+    // progresses.
     await new Promise<void>((res) => {
-      el.onended = () => res();
+      let lastT = el.currentTime;
+      let stalledSince = performance.now();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearInterval(iv);
+        el.onended = null;
+        el.onerror = null;
+        res();
+      };
+      const iv = setInterval(() => {
+        if (el.ended) return finish();
+        if (el.currentTime !== lastT) {
+          lastT = el.currentTime;
+          stalledSince = performance.now();
+        } else if (performance.now() - stalledSince > 5000) {
+          finish();
+        }
+      }, 250);
+      el.onended = finish;
+      el.onerror = finish;
     });
     rec.stop();
     await done;
     void ctx.close();
+    if (chunks.length === 0) return null; // capture heard nothing
     const webm = new Blob(chunks, { type: 'audio/webm' });
     const decoded = await new AudioContext().decodeAudioData(await webm.arrayBuffer());
     return decoded;
@@ -178,20 +230,25 @@ async function decodeViaPlayback(blob: Blob): Promise<AudioBuffer | null> {
     return null;
   } finally {
     URL.revokeObjectURL(el.src);
+    el.remove();
   }
 }
 
 /** Decode the recording's audio track to PCM. Null if decode fails. */
-async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
+export async function decodeAudio(blob: Blob): Promise<AudioBuffer | null> {
   try {
     const ctx = new AudioContext();
     const buf = await blob.arrayBuffer();
     const audio = await ctx.decodeAudioData(buf);
     void ctx.close();
+    console.warn(
+      `[audio] decodeAudioData ok — ${audio.duration.toFixed(2)}s, ${audio.numberOfChannels}ch`,
+    );
     return audio;
   } catch {
     // Some containers (native .mov) play but won't decode directly — capture
     // the audio by playing it through once.
+    console.warn('[audio] decodeAudioData rejected — falling back to realtime playback');
     return decodeViaPlayback(blob);
   }
 }
@@ -229,19 +286,30 @@ function scheduleFlat(
  * tracks play at 1×, independent of cuts and speed, but bounded by the trim:
  * playback starts at the trim in-point and can't run past the trimmed span.
  */
-async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
+export async function renderMixedAudio(project: Project, durSec: number): Promise<AudioBuffer | null> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(durSec * 48_000)), 48_000);
   const trimStart = (project.trim?.start ?? 0) / 1000;
   const trimEnd = (project.trim?.end ?? project.recording.duration) / 1000;
   // Audio never plays longer than the trimmed span (nor the output).
   const audioDur = Math.min(durSec, Math.max(0, trimEnd - trimStart));
   let any = false;
+  console.warn(
+    `[audio] sources — hasAudio=${project.recording.hasAudio}, ` +
+      `audioBlob=${project.recording.audioBlob ? 'yes' : 'no'}, music=${project.music ? 'yes' : 'no'}, ` +
+      `out=${durSec.toFixed(2)}s trim=${trimStart.toFixed(2)}→${trimEnd.toFixed(2)}`,
+  );
   if (project.recording.hasAudio) {
-    const b = await decodeAudio(project.recording.audioBlob ?? project.recording.blob);
+    const source = project.recording.audioBlob ?? project.recording.blob;
+    const b = await decodeAudio(source);
     if (b) {
       // Recorded audio is locked to the frames: start at the trim in-point.
       scheduleFlat(ctx, b, 0, 1, audioDur, trimStart);
       any = true;
+    } else {
+      console.warn(
+        '[audio] recorded track failed to decode',
+        source === project.recording.audioBlob ? '(m4a)' : '(raw mov)',
+      );
     }
   }
   if (project.music) {
@@ -250,27 +318,84 @@ async function renderMixedAudio(project: Project, durSec: number): Promise<Audio
       // Music sits at its own offset, measured from the trim in-point.
       scheduleFlat(ctx, b, project.music.offset / 1000 - trimStart, project.music.gain, audioDur);
       any = true;
+    } else {
+      console.warn('[audio] imported music failed to decode');
     }
   }
-  return any ? ctx.startRendering() : null;
+  if (!any) return null;
+  const out = await ctx.startRendering();
+  console.warn(
+    `[audio] mixed ${out.duration.toFixed(2)}s/${audioDur.toFixed(2)}s output at ${out.sampleRate}Hz`,
+  );
+  return out;
 }
 
-/** Encode a slice of an AudioBuffer as AAC chunks into the muxer. */
-async function encodeAudioTrack(
+/**
+ * The two-byte AudioSpecificConfig for AAC-LC from a sample rate + channel
+ * count. mp4-muxer writes this into the track's esds box; without it the AAC
+ * track is structurally invalid and players drop it (silent MP4).
+ *
+ * WebKit's AudioEncoder emits a decoderConfig whose `description` is undefined,
+ * and mp4-muxer Object.assigns that over the (good) config it guessed — so we
+ * hand the muxer an explicit config that always carries a real description.
+ */
+export function aacConfigDescription(sampleRate: number, channels: number): Uint8Array {
+  const FREQ: Array<[number, number]> = [
+    [96000, 0], [88200, 1], [64000, 2], [48000, 3], [44100, 4], [32000, 5],
+    [24000, 6], [22050, 7], [16000, 8], [12000, 9], [11025, 10], [8000, 11],
+  ];
+  const idx = FREQ.find(([f]) => f === sampleRate)?.[1];
+  if (idx === undefined) {
+    throw new RangeError(`Unsupported AAC sample rate ${sampleRate}`);
+  }
+  const chan = Math.max(1, Math.min(2, channels));
+  const val = (2 << 11) | (idx << 7) | (chan << 3); // AOT=2 (AAC-LC), freq, channel config
+  return new Uint8Array([val >> 8, val & 0xff]);
+}
+
+/**
+ * Encode a slice of an AudioBuffer as AAC chunks into the muxer. Returns the
+ * number of chunks added, so callers know whether the MP4 actually carries
+ * audio.
+ */
+export async function encodeAudioTrack(
   muxer: Muxer<ArrayBufferTarget>,
   audio: AudioBuffer,
   startSec: number,
   maxDurationSec: number,
-): Promise<void> {
+): Promise<number> {
   const channels = Math.min(audio.numberOfChannels, 2);
+  const support = await AudioEncoder.isConfigSupported({
+    codec: 'mp4a.40.2', // AAC-LC
+    sampleRate: audio.sampleRate,
+    numberOfChannels: channels,
+  });
+  if (!support.supported) {
+    console.warn(
+      `[audio] AudioEncoder rejects mp4a.40.2 @${audio.sampleRate}Hz x${channels} — MP4 will be silent`,
+    );
+    return 0;
+  }
+  const asc = aacConfigDescription(audio.sampleRate, channels);
   const encoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    output: (chunk, meta) => {
+      muxer.addAudioChunk(chunk, {
+        decoderConfig: {
+          codec: 'mp4a.40.2',
+          sampleRate: audio.sampleRate,
+          numberOfChannels: channels,
+          // Prefer the engine's own ASC when it provides one; WebKit doesn't.
+          description: meta?.decoderConfig?.description ?? asc,
+        },
+      });
+      chunksAdded++;
+    },
     error: (e) => {
       throw e;
     },
   });
   encoder.configure({
-    codec: 'mp4a.40.2', // AAC-LC
+    codec: 'mp4a.40.2',
     sampleRate: audio.sampleRate,
     numberOfChannels: channels,
     bitrate: 192_000,
@@ -282,6 +407,7 @@ async function encodeAudioTrack(
     startFrame + Math.floor(maxDurationSec * audio.sampleRate),
   );
   const CHUNK = 16_384;
+  let chunksAdded = 0;
   for (let off = startFrame; off < endFrame; off += CHUNK) {
     const len = Math.min(CHUNK, endFrame - off);
     const planar = new Float32Array(channels * len);
@@ -301,6 +427,8 @@ async function encodeAudioTrack(
   }
   await encoder.flush();
   encoder.close();
+  console.warn(`[audio] AAC encoded ${chunksAdded} chunks`);
+  return chunksAdded;
 }
 
 export async function exportProject(
@@ -445,8 +573,14 @@ export async function exportProject(
       onProgress({ frame: i + 1, totalFrames });
     }
     await encoder.flush();
-    if (audio) await encodeAudioTrack(muxer, audio, 0, outDurationSec);
+    let audioChunks = 0;
+    if (audio) audioChunks = await encodeAudioTrack(muxer, audio, 0, outDurationSec);
     muxer.finalize();
+    console.warn(
+      withAudio
+        ? `[audio] MP4 written with ${audioChunks} AAC chunks`
+        : '[audio] MP4 written without an audio track (nothing to encode, or encoder unavailable)',
+    );
     const { buffer } = muxer.target as ArrayBufferTarget;
     return { blob: new Blob([buffer], { type: 'video/mp4' }), extension: 'mp4' };
   } finally {

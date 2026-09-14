@@ -7,6 +7,15 @@ export default defineConfig({
   // dev and the Tauri desktop build keep the root base.
   base: process.env.GITHUB_PAGES ? '/Glimpse/' : '/',
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      // audio-test.html is a dev diagnostic; don't let it bloat the main bundle.
+      input: {
+        main: 'index.html',
+        audioTest: 'audio-test.html',
+      },
+    },
+  },
   server: {
     headers: {
       // Required for SharedArrayBuffer if we later move export into a worker

@@ -11,6 +11,7 @@ pub fn run() {
             capture::start_native_capture,
             capture::stop_native_capture,
             capture::read_recording,
+            capture::read_recording_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Glimpse");

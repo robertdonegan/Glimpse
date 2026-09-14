@@ -3,6 +3,7 @@ import { useGlimpse } from '../state/store';
 import { Icon } from './Icon';
 import type { CursorStyle } from '../timeline/model';
 import { clamp } from '../timeline/easing';
+import { audioExportable } from '../export/exporter';
 
 function SliderRow({
   label,
@@ -155,6 +156,13 @@ export function Inspector({
   if (!project) return null;
   const { style, recording } = project;
   const hasCursorData = recording.cursor.length > 0;
+  const audioNote = !recording.hasAudio && !project.music
+    ? 'No audio in this recording — re-record with “Capture audio” checked.'
+    : !audioExportable(project)
+      ? 'This webview cannot encode audio — the MP4 will be silent.'
+      : recording.hasAudio && !recording.audioBlob && !project.music
+        ? 'Recording audio track missing — export will try to recover it from the video.'
+        : null;
   const zoom = project.zooms.find((z) => z.id === selectedZoom) ?? null;
 
   const poseMatches = (pose: Pose) =>
@@ -452,7 +460,7 @@ export function Inspector({
             onChange={(e) =>
               patchStyle('background', {
                 ...style.background,
-                kind: e.target.value as 'gradient' | 'corners' | 'solid',
+                kind: e.target.value as 'gradient' | 'corners' | 'solid' | 'none',
               })
             }
             aria-label="Backdrop type"
@@ -460,10 +468,12 @@ export function Inspector({
             <option value="gradient">Linear gradient</option>
             <option value="corners">4-corner gradient</option>
             <option value="solid">Solid</option>
+            <option value="none">None — transparent</option>
           </select>
           </span>
         </div>
-        <div className="row" style={{ alignItems: 'flex-start' }}>
+        {style.background.kind !== 'none' && (
+        <><div className="row" style={{ alignItems: 'flex-start' }}>
           <label>Presets</label>
           <div className="gradient-presets">
             {GRADIENT_PRESETS.map((g) => (
@@ -571,6 +581,14 @@ export function Inspector({
             onChange={(e) => onBackdropFile(e.target.files?.[0])}
           />
         </div>
+        </>
+        )}
+        {style.background.kind === 'none' && (
+          <p className="hint">
+            Transparent background — export a PNG to keep the recording on a
+            clear background for slides and pages.
+          </p>
+        )}
       </details>
 
       <details className="section" open>
@@ -1340,6 +1358,7 @@ export function Inspector({
         >
           {exporting ? 'Rendering…' : 'Export MP4'}
         </button>
+        {audioNote && <p className="hint">{audioNote}</p>}
         <div className="export-buttons">
           <button
             className="btn"
@@ -1353,7 +1372,11 @@ export function Inspector({
             className="btn"
             onClick={() => void exportPng(2)}
             disabled={exporting}
-            title="Renders the current frame at 2× output resolution"
+            title={
+              style.background.kind === 'none'
+                ? 'Renders the current frame at 2× with a transparent background (alpha PNG)'
+                : 'Renders the current frame at 2× output resolution'
+            }
           >
             Export PNG
           </button>
