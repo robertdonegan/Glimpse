@@ -17,6 +17,8 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5175,
+    strictPort: true,
     headers: {
       // Required for SharedArrayBuffer if we later move export into a worker
       // with multi-threaded encoding. Harmless otherwise.
