@@ -600,7 +600,13 @@ export class GlimpseRenderer {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
-      alpha: false,
+      // The canvas needs an alpha channel so a 'none' backdrop can export a
+      // genuinely transparent PNG. Straight (unpremultiplied) alpha keeps the
+      // semi-transparent edges (rounded corners, soft shadow) reading correctly
+      // both when the browser composites the live preview and when toBlob
+      // writes the PNG — with premultiplied buffers the edge pixels double-up.
+      alpha: true,
+      premultipliedAlpha: false,
       // The exporter reads frames back so it needs the buffer preserved; the
       // live preview does not, and preserving it makes some GPU drivers show
       // faint vertical tiling seams. Default on, off for preview.
@@ -826,6 +832,12 @@ export class GlimpseRenderer {
 
   applyStyle(style: StyleSettings): void {
     this.style = style;
+    // 'none' backdrop: drop the fullscreen gradient/image plane entirely and
+    // clear to transparent so the recording exports as an alpha PNG. Every
+    // other kind clears opaque — the backdrop plane then covers the frame.
+    const transparent = style.background.kind === 'none';
+    this.backdrop.visible = !transparent;
+    this.renderer.setClearColor(0x000000, transparent ? 0 : 1);
     const u = this.backdrop.material.uniforms;
     u.colorA.value.set(style.background.colorA);
     u.colorB.value.set(

@@ -22,6 +22,8 @@ export function isTauri(): boolean {
 
 interface NativeCaptureResult {
   path: string;
+  /** Sibling m4a with the recording's audio, when one was extracted. */
+  audio_path: string | null;
   duration_ms: number;
   cursor: { t: number; x: number; y: number; hand: boolean }[];
   clicks: { t: number; x: number; y: number; button: number }[];
@@ -90,6 +92,21 @@ export async function beginNativeRecording(opts: {
     const bytes = await invoke<ArrayBuffer>('read_recording', { path: res.path });
     const blob = new Blob([bytes], { type: 'video/quicktime' });
 
+    // The Rust side extracts the .mov's audio track to a sibling m4a so it can
+    // be decoded offline (decodeAudioData) — no realtime playback, no autoplay
+    // gate. Falls back to decoding the .mov in the exporter if absent.
+    let audioBlob: Blob | undefined;
+    if (res.audio_path) {
+      try {
+        const ab = await invoke<ArrayBuffer>('read_recording_audio', {
+          path: res.audio_path,
+        });
+        if (ab.byteLength > 0) audioBlob = new Blob([ab], { type: 'audio/mp4' });
+      } catch {
+        audioBlob = undefined;
+      }
+    }
+
     const w = res.screen_w || 1;
     const h = res.screen_h || 1;
     return {
@@ -104,6 +121,7 @@ export async function beginNativeRecording(opts: {
       clicks: res.clicks.map((c) => ({ t: c.t, x: c.x / w, y: c.y / h, button: c.button })),
       keys: (res.keys ?? []).map((k) => ({ t: k.t, label: k.label })),
       hasAudio: res.has_audio,
+      audioBlob,
     };
   };
 

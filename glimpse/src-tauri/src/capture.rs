@@ -46,6 +46,9 @@ pub struct KeyEvent {
 #[derive(Serialize)]
 pub struct CaptureResult {
     pub path: String,
+    /// Sibling .m4a with the capture's audio track extracted (macOS `afconvert`),
+    /// so the webview can decode the sound offline instead of playing it back.
+    pub audio_path: Option<String>,
     pub duration_ms: f64,
     pub cursor: Vec<Sample>,
     pub clicks: Vec<Click>,
@@ -756,8 +759,15 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         ));
     }
 
+    let audio_path = if active.has_audio {
+        extract_capture_audio(&active.path)
+    } else {
+        None
+    };
+
     Ok(CaptureResult {
         path: active.path,
+        audio_path,
         duration_ms,
         cursor,
         clicks,
@@ -766,6 +776,33 @@ pub fn stop_native_capture(state: tauri::State<CaptureState>) -> Result<CaptureR
         screen_h,
         has_audio: active.has_audio,
     })
+}
+
+/// Extract the audio track from a finished capture into a sibling .m4a (AAC)
+/// the webview can decode offline via `decodeAudioData`. Returns the path when
+/// the capture actually contains audible audio; None when there's nothing to
+/// extract. macOS ships `afconvert`, so this needs no extra tooling and is
+/// fast (offline decode — no realtime playback).
+fn extract_capture_audio(mov_path: &str) -> Option<String> {
+    let out = format!("{mov_path}.m4a");
+    let ok = Command::new("afconvert")
+        .arg(mov_path)
+        .arg(&out)
+        .args(["-f", "m4af", "-d", "aac"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok
+        && std::fs::metadata(&out)
+            .map(|m| m.len() > 1024)
+            .unwrap_or(false)
+    {
+        return Some(out);
+    }
+    let _ = std::fs::remove_file(&out);
+    None
 }
 
 /// Stream the finished recording to the webview as raw bytes, then delete it.
@@ -781,6 +818,29 @@ pub fn read_recording(path: String) -> Result<tauri::ipc::Response, String> {
             .unwrap_or(false);
     if !valid {
         return Err("Invalid recording path".into());
+    }
+    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(p);
+    // The audio sibling (if extraction ran) is read separately and cleaned up
+    // on read; remove a leftover here defensively.
+    let _ = std::fs::remove_file(format!("{path}.m4a"));
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Stream the extracted audio track (see `extract_capture_audio`) to the
+/// webview as raw bytes, then delete it. Path restricted to files this module
+/// creates.
+#[tauri::command]
+pub fn read_recording_audio(path: String) -> Result<tauri::ipc::Response, String> {
+    let tmp = std::env::temp_dir();
+    let p = std::path::Path::new(&path);
+    let valid = p.starts_with(&tmp)
+        && p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("glimpse-native-") && n.ends_with(".mov.m4a"))
+            .unwrap_or(false);
+    if !valid {
+        return Err("Invalid recording audio path".into());
     }
     let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(p);

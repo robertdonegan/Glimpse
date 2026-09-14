@@ -183,7 +183,9 @@ export interface StyleSettings {
 }
 
 export interface BackgroundSettings {
-  kind: 'gradient' | 'corners' | 'solid' | 'image';
+  /** 'none' renders the recording on a transparent background — export as an
+   * alpha PNG for compositing onto slides, pages or other footage. */
+  kind: 'gradient' | 'corners' | 'solid' | 'image' | 'none';
   /** Linear: start/end. Corners: A=top-left, B=top-right. */
   colorA: string;
   colorB: string;

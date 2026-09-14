@@ -28,6 +28,10 @@ mod capture {
     pub fn read_recording(_path: String) -> Result<tauri::ipc::Response, String> {
         Err("Native screen capture is only available on macOS.".into())
     }
+    #[tauri::command]
+    pub fn read_recording_audio(_path: String) -> Result<tauri::ipc::Response, String> {
+        Err("Native screen capture is only available on macOS.".into())
+    }
 }
 
 /// Open a finished export in the OS's default app (video/GIF/PNG player).
@@ -69,6 +73,7 @@ pub fn run() {
             capture::start_native_capture,
             capture::stop_native_capture,
             capture::read_recording,
+            capture::read_recording_audio,
             open::open_path,
         ])
         .run(tauri::generate_context!())

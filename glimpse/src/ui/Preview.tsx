@@ -347,7 +347,9 @@ export function Preview({
     <div className="preview-wrap">
       <canvas
         ref={canvasRef}
-        className={`preview-canvas${pannable ? ' pannable' : ''}`}
+        className={`preview-canvas${pannable ? ' pannable' : ''}${
+          project?.style.background.kind === 'none' ? ' transparent' : ''
+        }`}
         onPointerDown={onPointerDown}
         title="Drag to reposition the recording (or pan a zoom under the playhead)"
       />
