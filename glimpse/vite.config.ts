@@ -17,6 +17,8 @@ export default defineConfig({
     },
   },
   server: {
+    // tauri.conf.json's devUrl is baked to 5175 — refuse to silently move
+    // ports, otherwise the Tauri window loads whatever happens to own the port.
     port: 5175,
     strictPort: true,
     headers: {
