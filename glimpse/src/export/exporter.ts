@@ -527,7 +527,7 @@ export async function exportProject(
       let frameSource: HTMLCanvasElement = canvas;
       if (mbSamples === 1 || !accumCtx) {
         const tSrcMs = outputToSource(pieces, tOutMs);
-        await seekTo(video, tSrcMs / 1000);
+        await seekToFrame(video, tSrcMs / 1000);
         renderer.render(sampleFrame(project, tSrcMs, spd));
       } else {
         accumCtx.globalCompositeOperation = 'source-over';
@@ -539,7 +539,7 @@ export async function exportProject(
         for (let m = 0; m < mbSamples; m++) {
           const subOut = Math.max(0, tOutMs + ((m + 0.5) / mbSamples - 0.5) * shutterMs);
           const tSrc = outputToSource(pieces, subOut);
-          await seekTo(video, tSrc / 1000);
+          await seekToFrame(video, tSrc / 1000);
           renderer.render(sampleFrame(project, tSrc, spd));
           accumCtx.drawImage(canvas, 0, 0);
         }
@@ -634,7 +634,7 @@ export async function exportGif(
     for (let i = 0; i < totalFrames; i++) {
       if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
       const tSrc = outputToSource(pieces, (i / GIF_FPS) * 1000 * spd);
-      await seekTo(video, tSrc / 1000);
+      await seekToFrame(video, tSrc / 1000);
       renderer.render(sampleFrame(project, tSrc, spd));
       rctx.drawImage(canvas, 0, 0);
       const { data } = rctx.getImageData(0, 0, width, height);
